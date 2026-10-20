@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) {
 
 try {
   const sql = neon(process.env.DATABASE_URL);
-  // schema.sql contains only simple CREATE statements, without SQL functions.
+  // schema.sql contains only simple DDL statements, without SQL functions.
   const schema = await readFile(new URL('../schema.sql', import.meta.url), 'utf8');
   const statements = schema.split(';').map(s => s.trim()).filter(Boolean);
   await sql.transaction(statements.map(statement => sql.query(statement)));

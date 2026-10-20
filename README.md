@@ -42,6 +42,9 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 ## O que está implementado
 
+- Usuários nomeados: Raquel acessa Podologia; Jefferson acessa Pessoal. Contas criadas com senha temporária exigem a troca no primeiro acesso, antes de liberar dados ou gravações.
+- A criação inicial assistida usa uma autorização Ed25519 assinada, de curta duração. `scripts/manage-accounts.mjs prepare` guarda chave privada e senhas somente em `.account-setup.local.json`, ignorado pelo Git; apenas a chave pública é publicada. Após publicar essa chave, `provision` cria as duas contas sem substituir contas existentes; `check` testa os logins e encerra as sessões de teste. Nenhuma senha é incluída no código ou no repositório.
+
 - Visual sóbrio em verde dólar, com superfícies neutras e menos elementos decorativos.
 - Primeiro acesso sem senha padrão: cada perfil cria sua senha, confirma e usa o código de ativação definido pelo administrador em `SETUP_CODE`. Nos próximos acessos, basta a senha do perfil.
 - Se a API estiver indisponível, a tela informa a falha e permite tentar novamente; ela não oferece criar uma conta sem conseguir verificar os perfis existentes.
