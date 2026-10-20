@@ -1,7 +1,14 @@
 import { neon } from '@neondatabase/serverless';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
+import { schemaAwareSql } from '../lib/database-schema.js';
 
-const getSql = () => neon(process.env.DATABASE_URL);
+let connectionUrl, database;
+const getSql = () => {
+ const url=readDatabaseUrl(process.env.DATABASE_URL);
+ if(!database||connectionUrl!==url){database=schemaAwareSql(neon(url));connectionUrl=url}
+ return database;
+};
 const sql = (...args) => getSql()(...args);
 const cookieName = 'meu_studio_session';
 const defaultData = () => ({services:[{id:crypto.randomUUID(),name:'Podologia completa',duration:60,price:130},{id:crypto.randomUUID(),name:'Cuidados com os pés',duration:45,price:85},{id:crypto.randomUUID(),name:'Cuidados com as mãos',duration:30,price:55}],clients:[],appointments:[],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}});
@@ -56,7 +63,7 @@ export default async function handler(req,res){
    return send(res,200,{ok:true,revision:rows[0].revision});
   }
   return send(res,400,{error:'Operação inválida'});
- }catch(e){console.error('API error',e);return send(res,500,{error:'Erro interno no servidor'})}
+ }catch(e){const failure=databaseFailure(e);console.error('API error',{code:failure?.code||'INTERNAL_ERROR',upstreamCode:e.code||e.cause?.code||null});return send(res,failure?.status||500,failure?{error:failure.error,code:failure.code}:{error:'Erro interno no servidor',code:'INTERNAL_ERROR'})}
 }
 async function issueSession(res,account){
  const token=randomBytes(32).toString('hex');

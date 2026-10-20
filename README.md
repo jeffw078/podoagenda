@@ -22,7 +22,11 @@ Use Node.js 24 e instale as dependências com `npm ci`. Para inicializar
 pela linha de comando, copie `.env.example` para `.env.local`, preencha
 `DATABASE_URL` com a conexão do banco correto e execute `npm run db:init`.
 O comando aplica o schema em uma transação e verifica a presença das duas
-tabelas. Também é possível executar `schema.sql` no SQL Editor do Neon,
+tabelas. A API também inicializa o schema automaticamente se uma consulta
+encontrar tabelas ausentes (`42P01`), usando o banco/branch de `DATABASE_URL`
+do deploy. Ela não importa dados de outro banco. O usuário da conexão precisa
+ter permissão para criar as tabelas. O arquivo `schema.sql` é incluído na função
+pela configuração da Vercel. Também é possível executar `schema.sql` no SQL Editor do Neon,
 acessível pela área Storage da Vercel.
 
 Os comandos `CREATE ... IF NOT EXISTS` permitem repetir a inicialização,

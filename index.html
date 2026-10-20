@@ -91,7 +91,7 @@ async function initAuth(){
   registered=out.registered;setupAvailable=out.setupAvailable!==false;
   const me=await api('me').catch(()=>null);if(me){profile=me.profile;startSession(me);return}
   chooseProfile(profile);
- }catch(e){registered=null;chooseProfile(profile);$('authMessage').textContent='Não foi possível verificar seu acesso. Tente novamente em instantes.';$('authFeedback').textContent='Falha de conexão com o sistema. Nenhuma senha foi criada ou alterada.';$('authRetry').classList.remove('hidden')}
+ }catch(e){registered=null;chooseProfile(profile);$('authMessage').textContent='Não foi possível verificar seu acesso. Nenhuma senha foi criada ou alterada.';$('authFeedback').textContent=e.message||'Falha de conexão com o sistema. Tente novamente em instantes.';$('authAction').textContent='Acesso indisponível';$('authRetry').classList.remove('hidden')}
 }
 async function lockApp(){try{await saveChain;await api('logout')}catch(e){console.error(e)}unlocked=false;db=initial();revision=0;saveFailed=false;closeModal();$('authVeil').classList.remove('hidden');chooseProfile(profile)}
 function chooseProfile(next){
