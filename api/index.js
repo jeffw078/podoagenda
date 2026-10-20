@@ -20,7 +20,7 @@ export default async function handler(req,res){
   if(!req.headers.origin||new URL(req.headers.origin).host!==req.headers.host)return send(res,403,{error:'Origem inválida'});
   const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
   const {action}=body;
-  if(action==='status'){const profiles=await sql`SELECT profile FROM studio_accounts`;return send(res,200,{registered:profiles.map(x=>x.profile)})}
+  if(action==='status'){const profiles=await sql`SELECT profile FROM studio_accounts`;return send(res,200,{registered:profiles.map(x=>x.profile),setupAvailable:Boolean(process.env.SETUP_CODE)})}
   if(action==='register'){
    const profile=profileName(body.profile),password=body.password;
    if(!process.env.SETUP_CODE||typeof body.setupCode!=='string'||body.setupCode!==process.env.SETUP_CODE)return send(res,403,{error:'Código de configuração inválido'});

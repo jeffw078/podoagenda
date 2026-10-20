@@ -38,6 +38,11 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 ## O que está implementado
 
+- Visual sóbrio em verde dólar, com superfícies neutras e menos elementos decorativos.
+- Primeiro acesso sem senha padrão: cada perfil cria sua senha, confirma e usa o código de ativação definido pelo administrador em `SETUP_CODE`. Nos próximos acessos, basta a senha do perfil.
+- Se a API estiver indisponível, a tela informa a falha e permite tentar novamente; ela não oferece criar uma conta sem conseguir verificar os perfis existentes.
+- `npm test` verifica a sintaxe do JavaScript e os fluxos de autenticação, confirmação de senha, falta de ativação e recuperação após falha de conexão, sem acessar o banco.
+
 - Duas contas independentes e isoladas pela sessão autenticada no servidor.
 - Financeiro nos dois espaços: entradas, despesas com linhas detalhadas, categorias e agrupamento por mês; gráficos por categoria.
 - Podologia: clientes, serviços, agenda, bloqueio de almoço de pelo menos 60 minutos e encaixes.
