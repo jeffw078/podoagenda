@@ -11,6 +11,31 @@ Dois perfis com login separado: Podologia e Pessoal. O navegador usa API do Verc
 5. Na versão antiga, exporte os dois arquivos JSON separadamente. Entre em cada perfil novo e use **Importar JSON** para recuperar o conteúdo correspondente. Importar substitui todos os dados do perfil selecionado.
 6. Remova `SETUP_CODE` do ambiente após criar ambas as contas e faça um novo deploy. Mantenha os backups do Neon e exportações periódicas.
 
+## Inicializar o Neon
+
+O schema é compatível com PostgreSQL do Neon: utiliza `gen_random_uuid()`,
+`JSONB`, `TIMESTAMPTZ`, chaves estrangeiras e um índice de expiração.
+Não exige instalar extensões. A integração Neon/Vercel fornece a conexão,
+mas não executa o schema automaticamente.
+
+Use Node.js 24 e instale as dependências com `npm ci`. Para inicializar
+pela linha de comando, copie `.env.example` para `.env.local`, preencha
+`DATABASE_URL` com a conexão do banco correto e execute `npm run db:init`.
+O comando aplica o schema em uma transação e verifica a presença das duas
+tabelas. Também é possível executar `schema.sql` no SQL Editor do Neon,
+acessível pela área Storage da Vercel.
+
+Os comandos `CREATE ... IF NOT EXISTS` permitem repetir a inicialização,
+mas não atualizam a estrutura de tabelas que já existam com as mesmas
+identificações. Este schema não importa os dados da versão anterior.
+
+Na Vercel, configure `DATABASE_URL` e `SETUP_CODE` no ambiente do deploy.
+Depois de alterar as variáveis, faça um novo deploy. `.env.local`, outros
+arquivos de segredos e `.vercel/` ficam excluídos do Git.
+
+Referências: [integração Neon/Vercel](https://vercel.com/marketplace/neon/neon)
+e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.html).
+
 ## O que está implementado
 
 - Duas contas independentes e isoladas pela sessão autenticada no servidor.
