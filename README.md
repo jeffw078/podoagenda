@@ -42,6 +42,8 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 ## O que está implementado
 
+- Despesas com escolha obrigatória de débito, dinheiro ou crédito nos dois perfis. No crédito, é possível definir o número de parcelas (até 120) e o mês da primeira fatura, inclusive o mês seguinte quando o cartão já fechou. A prévia mostra os valores por mês; a divisão preserva os centavos do total, sem duplicar a compra nos relatórios.
+
 - Usuários nomeados: Raquel acessa Podologia; Jefferson acessa Pessoal. Contas criadas com senha temporária exigem a troca no primeiro acesso, antes de liberar dados ou gravações.
 - A criação inicial assistida usa uma autorização Ed25519 assinada, de curta duração. `scripts/manage-accounts.mjs prepare` guarda chave privada e senhas somente em `.account-setup.local.json`, ignorado pelo Git; apenas a chave pública é publicada. Após publicar essa chave, `provision` cria as duas contas sem substituir contas existentes; `check` testa os logins e encerra as sessões de teste. Nenhuma senha é incluída no código ou no repositório.
 

@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+
+const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+const source=html.slice(html.indexOf('function planExpensePayments('),html.indexOf('let ocrWorker='));
+const elements=new Map(),alerts=[];
+const element=id=>{
+ if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',disabled:false,required:false,classList:{toggle(){}},focus(){}});
+ return elements.get(id);
+};
+let items=[{name:'Compra de teste',qty:1,unit:100.01}],saved=0,sequence=0;
+const db={services:[],clients:[],appointments:[],transactions:[],settings:{}};
+const context=vm.createContext({$:element,db,expenseItems:()=>items,uid:()=>String(++sequence),persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),money:value=>Number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),esc:value=>String(value)});
+vm.runInContext(source,context);
+const plan=(cents,method,count,month,date)=>context.planExpensePayments(cents,method,count,month,date);
+const credit=plan(10001,'credit',3,'2026-12','2026-10-20');
+assert.deepEqual(Array.from(credit,p=>p.date),['2026-12-01','2027-01-01','2027-02-01']);
+assert.deepEqual(Array.from(credit,p=>Math.round(p.amount*100)),[3334,3334,3333]);
+assert.equal(credit.reduce((total,p)=>total+Math.round(p.amount*100),0),10001);
+assert.equal(plan(1500,'credit',1,'2026-11','2026-10-31')[0].date,'2026-11-01');
+assert.equal(plan(1500,'debit',NaN,'','2026-10-31')[0].date,'2026-10-31');
+assert.equal(plan(1500,'cash',NaN,'','2024-02-29')[0].amount,15);
+assert.equal(plan(100,'credit',2,'2024-02','2024-02-29')[1].date,'2024-03-01');
+for(const args of [[0,'cash',1,'','2026-10-20'],[100,'',1,'','2026-10-20'],[100,'credit',0,'2026-10','2026-10-20'],[100,'credit',2.5,'2026-10','2026-10-20'],[100,'credit',121,'2026-10','2026-10-20'],[1,'credit',2,'2026-10','2026-10-20'],[100,'credit',2,'2026-09','2026-10-20'],[100,'credit',2,'2026-13','2026-10-20'],[100,'cash',1,'','2026-02-30']])assert.throws(()=>plan(...args));
+
+element('eDescription').value='Compra parcelada';element('eDate').value='2026-10-20';element('eCategory').value='Mercado';element('ePaymentMethod').value='credit';element('eInstallments').value='3';element('eFirstMonth').value='2026-12';
+context.updateExpensePayment();assert.equal(element('eFirstMonth').disabled,false);assert.equal(element('eInstallments').required,true);
+assert.ok(element('expensePaymentPreview').innerHTML.includes('dezembro de 2026'));
+context.saveExpense();assert.equal(alerts.length,0);assert.equal(saved,1);assert.equal(db.transactions.length,3);
+assert.equal(new Set(db.transactions.map(t=>t.installmentGroupId)).size,1);
+assert.equal(new Set(db.transactions.map(t=>t.id)).size,3);
+assert.equal(db.transactions[0].purchaseAmount,100.01);assert.equal(db.transactions[0].purchaseDate,'2026-10-20');
+assert.equal(db.transactions[2].installmentNumber,3);assert.equal(db.transactions[2].installmentCount,3);
+assert.match(context.transactionTitle(db.transactions[1]),/parcela 2\/3/);
+const totalsFunction=html.match(/^function totals.*$/m)[0];vm.runInContext(totalsFunction,context);
+assert.equal(context.totals('2026-10-01','2026-10-31').expense,0);
+assert.equal(context.totals('2026-12-01','2026-12-31').expense,33.34);
+assert.equal(context.totals('2027-01-01','2027-01-31').expense,33.34);
+assert.equal(context.totals('2027-02-01','2027-02-28').expense,33.33);
+const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
+const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData');
+assert.equal(validate(db),true);
+
+element('ePaymentMethod').value='debit';context.updateExpensePayment();
+assert.equal(element('eFirstMonth').disabled,true);assert.equal(element('eInstallments').required,false);
+context.saveExpense();assert.equal(db.transactions.length,4);assert.equal(db.transactions[3].amount,100.01);assert.equal(db.transactions[3].date,'2026-10-20');
+assert.equal('installmentGroupId' in db.transactions[3],false);
+element('ePaymentMethod').value='cash';context.saveExpense();assert.equal(db.transactions[4].method,'Dinheiro');
+element('ePaymentMethod').value='';context.saveExpense();assert.equal(db.transactions.length,5);assert.equal(alerts.length,1);
+element('eFirstMonth').value='2026-11';element('eDate').value='2026-12-10';context.syncExpensePurchaseDate();assert.equal(element('eFirstMonth').value,'2026-12');
+console.log('OK: pagamento obrigatório, débito, dinheiro, crédito, centavos exatos, virada de ano e totais mensais sem duplicação.');
