@@ -66,8 +66,13 @@ try {
     assert.equal(reentry.status,200);assert.equal(reentry.body.mustChangePassword,false);
     const wrongProfile=account.profile==='podo'?'personal':'podo';
     assert.equal((await request({action:'login',profile:wrongProfile,username:account.username,password:permanent})).status,401);
-    const saved=await request({action:'save',revision:reentry.body.revision,data:reentry.body.data},reentry.cookie);
+    const appointment={id:'history-test',clientId:'client-test',serviceIds:['service-test'],date:'2026-10-21',time:'09:00',duration:60,price:130,status:'concluido',treatmentNotes:'Procedimento realizado.\nOrientações de teste.',completedAt:'2026-10-21T12:00:00.000Z',serviceSnapshot:[{id:'service-test',name:'Podologia completa',duration:60,price:130}]};
+    const data={...reentry.body.data,appointments:[appointment]};
+    const saved=await request({action:'save',revision:reentry.body.revision,data},reentry.cookie);
     assert.equal(saved.status,200);
+    const restored=await request({action:'me'},reentry.cookie);
+    assert.equal(restored.body.data.appointments[0].treatmentNotes,appointment.treatmentNotes);
+    assert.equal(restored.body.data.appointments[0].serviceSnapshot[0].name,'Podologia completa');
   }
   console.log('OK PostgreSQL: migração preserva dados; criação, login, isolamento, troca da senha, revogação de sessões e gravação.');
 }finally{await db.close()}

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+
+const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+const source=html.slice(html.indexOf('function openClient('),html.indexOf('function paymentFor('));
+const elements=new Map(),alerts=[];let saved=0,sequence=0,opened;
+const element=id=>{if(!elements.has(id))elements.set(id,{value:'',classList:{toggle(){}},focus(){}});return elements.get(id)};
+const db={clients:[{id:'c1',name:'Ana',phone:'47999999999'},{id:'c2',name:'Bia',phone:'47988888888'}],services:[{id:'s1',name:'Podologia completa',duration:60,price:130}],appointments:[{id:'a1',clientId:'c1',serviceIds:['s1'],date:'2026-10-20',time:'09:00',duration:60,price:130,status:'agendado'},{id:'a2',clientId:'c2',serviceIds:['s1'],date:'2026-10-20',time:'11:00',duration:60,price:130,status:'agendado',treatmentNotes:'Relato de outra cliente'},{id:'legacy',clientId:'c1',serviceIds:['s1'],date:'2026-09-10',time:'09:00',duration:60,price:130,status:'concluido'}],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
+const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const context=vm.createContext({db,$:element,esc,uid:()=>String(++sequence),persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),confirm:()=>true,modal:(title,body)=>{opened={title,body}},field:()=>'',formHtml:(body,handler)=>body+' '+handler,document:{querySelectorAll:()=>[{value:'s1'}]},durationLabel:n=>n+' min',money:n=>'R$ '+n.toFixed(2),mins:time=>{const [h,m]=time.split(':').map(Number);return h*60+m},options:()=>'',dateToday:'2026-10-21'});
+vm.runInContext(source,context);
+context.openCompleteAppointment('a1');assert.ok(opened.body.includes('completionNotes'));assert.equal(db.appointments[0].status,'agendado');assert.equal(saved,0);
+element('completionNotes').value='Procedimentos realizados.\nOrientações <script>alert(1)</script>';
+context.saveAppointmentCompletion('a1');
+const completed=db.appointments[0];assert.equal(completed.status,'concluido');assert.ok(completed.completedAt);assert.equal(completed.treatmentNotes,element('completionNotes').value);assert.equal(completed.serviceSnapshot[0].name,'Podologia completa');assert.equal(db.transactions.length,0);
+const completedAt=completed.completedAt;
+db.services[0].name='Serviço renomeado';db.services[0].price=200;
+let history=context.clientHistoryHtml('c1');assert.ok(history.includes('Podologia completa'));assert.ok(history.includes('R$ 130.00'));assert.ok(history.includes('&lt;script&gt;'));assert.equal(history.includes('<script>'),false);assert.equal(history.includes('Relato de outra cliente'),false);
+assert.ok(history.indexOf('20/10/2026')<history.indexOf('10/09/2026'));
+context.openClient('c1');assert.ok(opened.body.includes('Histórico de atendimentos'));
+context.openClientHistory('c1');assert.ok(opened.body.includes('Ana'));
+context.updateApStatus('a2','concluido');assert.equal(db.appointments[1].status,'agendado');assert.ok(opened.body.includes('completionNotes'));
+element('completionNotes').value='Relato atualizado';context.saveAppointmentCompletion('a1','c1');assert.equal(completed.completedAt,completedAt);assert.equal(completed.serviceSnapshot[0].name,'Podologia completa');assert.ok(opened.body.includes('Relato atualizado'));
+element('completionNotes').value='x'.repeat(10001);const before=saved;context.saveAppointmentCompletion('a1');assert.equal(saved,before);assert.equal(completed.treatmentNotes,'Relato atualizado');
+db.appointments[1].status='cancelado';context.openCompleteAppointment('a2');assert.match(alerts.at(-1),/cancelado/);
+
+for(const [id,value] of Object.entries({apClient:'c1',apDate:'2026-10-22',apTime:'09:00',apStatus:'concluido',apTreatmentNotes:'Relato pelo formulário de edição'}))element(id).value=value;
+context.saveAppointment('');const edited=db.appointments.at(-1);assert.equal(edited.status,'concluido');assert.equal(edited.treatmentNotes,'Relato pelo formulário de edição');assert.equal(edited.serviceSnapshot[0].name,'Serviço renomeado');assert.ok(edited.completedAt);
+const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
+const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData');
+assert.equal(validate(db),true);edited.treatmentNotes=42;assert.equal(validate(db),false);edited.treatmentNotes='x'.repeat(10001);assert.equal(validate(db),false);
+assert.ok(context.clientHistoryHtml('unknown').includes('Nenhum atendimento registrado'));
+console.log('OK: histórico por cliente, conclusão com relato, edição, serviços preservados, registros antigos e proteção do texto.');

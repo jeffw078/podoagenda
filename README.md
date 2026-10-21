@@ -42,6 +42,8 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 ## O que está implementado
 
+- Histórico de atendimentos dentro do cadastro de cada cliente, com data, serviços, duração, valor, status e relato. A conclusão abre um campo livre para descrever o que foi feito; o relato também pode ser incluído ou editado depois. Serviços são registrados com os nomes e valores da conclusão para preservar o histórico quando o catálogo mudar. O pagamento continua sendo registrado separadamente.
+
 - Despesas com escolha obrigatória de débito, dinheiro ou crédito nos dois perfis. No crédito, é possível definir o número de parcelas (até 120) e o mês da primeira fatura, inclusive o mês seguinte quando o cartão já fechou. A prévia mostra os valores por mês; a divisão preserva os centavos do total, sem duplicar a compra nos relatórios.
 
 - Usuários nomeados: Raquel acessa Podologia; Jefferson acessa Pessoal. Contas criadas com senha temporária exigem a troca no primeiro acesso, antes de liberar dados ou gravações.
