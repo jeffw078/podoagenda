@@ -40,7 +40,16 @@ export function createTasksFeature(ctx) {
   }
 
   function renderTasks() {
-    modal('Tarefas', `<form class="fields" data-onsubmit="saveTask()"><label class="field">Tarefa<input id="taskTitle" type="text" maxlength="200" required></label><label class="field">Prazo (opcional)<input id="taskDueDate" type="date"></label><button type="submit" class="btn full">Adicionar tarefa</button></form><div class="divider"></div><div class="task-list">${taskRows()}</div>`);
+    modal('Tarefas', `<div class="actions" style="justify-content:flex-end;margin-bottom:8px"><button type="button" class="btn small" data-onclick="openNewTask()" aria-label="Adicionar tarefa" title="Adicionar tarefa"><span aria-hidden="true">＋</span></button></div><div class="task-list">${taskRows()}</div>`);
+  }
+
+  function renderTaskForm(title = '', dueDate = '') {
+    modal('Nova tarefa', `<form class="fields" data-onsubmit="saveTask()"><label class="field">Tarefa<input id="taskTitle" type="text" maxlength="200" value="${esc(title)}" required></label><label class="field">Prazo (opcional)<input id="taskDueDate" type="date" value="${esc(dueDate)}"></label><button type="submit" class="btn full">Salvar</button><button type="button" class="btn outline full" data-onclick="openTasks()">Cancelar</button></form>`);
+  }
+
+  function openNewTask() {
+    if (!authorized() || busy || revision === null) return;
+    renderTaskForm();
   }
 
   async function reload(epoch) {
@@ -65,9 +74,7 @@ export function createTasksFeature(ctx) {
     const epoch = epochNow();
     busy = true;
     const restoreForm = (title, dueDate) => {
-      renderTasks();
-      if ($('taskTitle')) $('taskTitle').value = title;
-      if ($('taskDueDate')) $('taskDueDate').value = dueDate;
+      renderTaskForm(title, dueDate);
     };
     try {
       const title = $('taskTitle')?.value?.trim() || '';
@@ -109,5 +116,5 @@ export function createTasksFeature(ctx) {
     } finally { busy = false; }
   }
 
-  return { openTasks, saveTask, completeTask };
+  return { openTasks, openNewTask, saveTask, completeTask };
 }

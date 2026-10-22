@@ -38,17 +38,22 @@ const feature = createTasksFeature({
   }
 });
 await feature.openTasks();
-assert.match(modalHtml, /data-onsubmit="saveTask\(\)"/);
+assert.match(modalHtml, /data-onclick="openNewTask\(\)"/);
+assert.doesNotMatch(modalHtml, /<form|taskTitle|taskDueDate/, 'Task list only shows actions, without a creation form');
 assert.match(modalHtml, /checked disabled/);
 assert.match(modalHtml, /Concluída por jefferson/);
 assert.match(modalHtml, /Comprar &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 assert.doesNotMatch(modalHtml, /<script>/);
 assert.match(modalHtml, /data-onchange="completeTask\(&quot;/);
+feature.openNewTask();
+assert.match(modalHtml, /data-onsubmit="saveTask\(\)"/);
+assert.match(modalHtml, /type="submit"[^>]*>Salvar</);
 
 elements.set('taskTitle', { value: 'Revisar agenda' });
 elements.set('taskDueDate', { value: '2026-10-23' });
 await feature.saveTask();
 assert.deepEqual(calls[0], ['tasksCreate', { title: 'Revisar agenda', dueDate: '2026-10-23', revision: 4 }]);
+assert.doesNotMatch(modalHtml, /<form|taskTitle/, 'Successful save returns to the actions list');
 await feature.completeTask(first[0].id);
 assert.deepEqual(calls[1], ['tasksComplete', { id: first[0].id, revision: 5 }]);
 
@@ -74,6 +79,7 @@ const busyFeature = createTasksFeature({
   mutateTask: async () => { mutationCalls++; return new Promise(resolve => { releaseMutation = resolve; }); }
 });
 await busyFeature.openTasks();
+busyFeature.openNewTask();
 const firstSave = busyFeature.saveTask();
 await busyFeature.saveTask();
 assert.equal(mutationCalls, 1, 'concurrent submission is serialized');
@@ -92,6 +98,7 @@ const failureFeature = createTasksFeature({
   mutateTask: async action => { throw Error(action === 'tasksComplete' ? 'Falha ao concluir.' : 'Falha ao criar.'); }
 });
 await failureFeature.openTasks();
+failureFeature.openNewTask();
 await failureFeature.saveTask();
 assert.equal(failureElements.get('taskTitle').value, 'Manter este texto', 'failed creation keeps its form values');
 assert.equal(failureElements.get('taskDueDate').value, '2026-10-24');

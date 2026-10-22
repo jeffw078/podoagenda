@@ -118,7 +118,7 @@ try{
  const login=async username=>{await input('#authUsername',username);await input('#authPassword','SyntheticBrowserOnly123!');await submit('#authForm');await waitFor(`document.querySelector('#authVeil').classList.contains('hidden')&&document.querySelector('#headerGreeting').textContent===${JSON.stringify('Olá, '+username.charAt(0).toUpperCase()+username.slice(1))}`)};
  const assertPrivate=async()=>{
   assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList,template').length"),0,'Personal DOM has no clinical views or templates');
-  assert.deepEqual(await evaluate("['db','profile','unlocked','openAppointment','saveClient','navigate','openTasks','saveTask','completeTask','dashboardOpenExpenses'].map(key=>typeof window[key])"),Array(10).fill('undefined'),'Application state and handlers stay module-private');
+  assert.deepEqual(await evaluate("['db','profile','unlocked','openAppointment','saveClient','navigate','openTasks','openNewTask','saveTask','completeTask','dashboardOpenExpenses'].map(key=>typeof window[key])"),Array(11).fill('undefined'),'Application state and handlers stay module-private');
   await evaluate("window.profile='podo';for(const code of [\"openClient()\",\"navigate('agenda')\"]){const button=document.createElement('button');button.dataset.onclick=code;document.body.append(button);button.click();button.remove()}delete window.profile");
   assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList,#cName').length"),0,'Forged public profile and handler attributes do not mount clinical UI');
  };
@@ -134,6 +134,8 @@ try{
  assert.ok(!assets.some(item=>item.username==='jefferson'&&/clinic(?:-features\.js|\.html)/.test(item.url)),'Personal login does not fetch clinical views or feature module');
  assert.ok(wire.filter(item=>item.username==='jefferson'&&item.action==='me').every(item=>!('clients'in item.body.data)&&!('settings'in item.body.data)&&!('services'in item.body.data)&&!('appointments'in item.body.data)),'Personal wire data excludes clinical keys');
  await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
+ assert.equal(await evaluate("document.querySelectorAll('#modalContent form,#taskTitle,#taskDueDate').length"),0,'TODO initially shows only the task list');
+ await click('#modalContent button[aria-label="Adicionar tarefa"]');await waitFor("document.querySelector('#modalTitle').textContent==='Nova tarefa'");
  await input('#taskTitle','Revisar agenda compartilhada');await input('#taskDueDate','2026-11-05');await submit();await waitSaved(()=>ownersTasks.length===1);
  assert.equal(ownersTasks[0].createdBy,'jefferson','task creator comes from the authenticated owner');
  assert.equal(ownersTasks[0].dueDate,'2026-11-05');
@@ -205,6 +207,10 @@ try{
  assert.deepEqual(friend,beforeForgery,'Forged clinical writes do not change data or revision');
  await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
  assert.ok(await evaluate("!document.querySelector('#modalContent').textContent.includes('Revisar agenda compartilhada')"),'Filla task list is isolated from the owners');
+ await click('#modalContent button[aria-label="Adicionar tarefa"]');await waitFor("document.querySelector('#modalTitle').textContent==='Nova tarefa'");
+ await button('Cancelar','document.querySelector("#modalContent")');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
+ assert.equal(await evaluate("document.querySelectorAll('#modalContent form').length"),0,'Cancel returns to task list');
+ await click('#modalContent button[aria-label="Adicionar tarefa"]');
  await input('#taskTitle','Tarefa privada da Filla');await submit();await waitSaved(()=>isolatedTasks.get('filla')?.tasks.length===1);
  assert.equal(ownersTasks.length,1,'Filla task does not enter the shared owners list');await escape();
  await nav('configuracoes');await button('Cadastrar saldo');await input('#financeBalanceAmount','200');await submit();await waitSaved(()=>friend.data.finance?.openingBalance?.amount===200);
