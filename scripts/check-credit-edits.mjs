@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import '../finance-core.js';
+import '../src/shared/finance-core.js';
 const F=globalThis.FinanceCore;
 const data={transactions:[]};
 F.recordCreditPurchase(data,{cardId:'nubank',description:'Compra atual',category:'Outros',purchaseDate:'2026-10-01',amount:300,items:[],installments:[{date:'2099-01-01',amount:100,installmentNumber:1,installmentCount:3},{date:'2099-02-01',amount:100,installmentNumber:2,installmentCount:3},{date:'2099-03-01',amount:100,installmentNumber:3,installmentCount:3}]});

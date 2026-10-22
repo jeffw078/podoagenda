@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import {validateCardLimits} from '../finance-insights.js';
+import {validateCardLimits} from '../src/shared/finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 import { test } from 'node:test';
 
-const html=await readFile(new URL('../app.js',import.meta.url),'utf8');
+const html=await readFile(new URL('../src/client/app.js',import.meta.url),'utf8');
 const source=[
   html.slice(html.indexOf('function field('),html.indexOf('function openService(')),
   html.slice(html.indexOf('function openClient('),html.indexOf('const categories=')),

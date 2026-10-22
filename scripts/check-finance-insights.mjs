@@ -1,11 +1,11 @@
 ﻿import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createFinanceInsights, validateCardLimits } from '../finance-insights.js';
+import { createFinanceInsights, validateCardLimits } from '../src/shared/finance-insights.js';
 
 const context = vm.createContext({ console, Date, Intl, Math, JSON, Number, String, Boolean, structuredClone, BigInt,
   crypto: { randomUUID: () => 'insight-test-id' } });
-vm.runInContext(fs.readFileSync(new URL('../finance-core.js', import.meta.url), 'utf8'), context);
+vm.runInContext(fs.readFileSync(new URL('../src/shared/finance-core.js', import.meta.url), 'utf8'), context);
 const Core = context.FinanceCore, Insights = createFinanceInsights(Core);
 const data = { transactions: [], finance: { version: 1, openingBalance: null, adjustments: [], monthlyPlans: [], recurringBills: [], bills: [], creditPurchases: [] } };
 Core.setMonthPlan(data, '2026-10', { expectedIncome: 1000, reserveMode: 'percentage', reserveValue: 10, reserveDueDay: 25 });

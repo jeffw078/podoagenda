@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {parseCsv,readBankStatements,prepareBankStatementImport} from '../lib/bank-statement-import.js';
-import '../finance-core.js';
+import '../src/shared/finance-core.js';
 const F=globalThis.FinanceCore;
 const debitCsv='Data,Valor,Identificador,Descrição\r\n02/10/2026,-10.00,a,Compra no débito - MERCADO\r\n03/10/2026,-20.00,b,"Compra no débito - Farmacia, Centro"\r\n04/10/2026,500.00,c,Transferência recebida pelo Pix - Pessoa\r\n05/10/2026,-50.00,d,Pagamento de fatura\r\n06/10/2026,-60.00,e,Transferência enviada pelo Pix - Pessoa\r\n';
 const creditCsv='date,title,amount\n2026-10-10,"Mercado, Centro","10,00"\n2026-10-10,"Mercado, Centro","10,00"\n2026-09-30,Compra antiga - Parcela 7/12,"5,00"\n2026-10-02,Pagamento recebido,"- 4.000,00"\n';

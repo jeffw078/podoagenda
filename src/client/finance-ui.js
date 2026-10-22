@@ -134,7 +134,6 @@ function financeUpdatePlanMode(scope = '') {
   if (percentage) $(id('financePlanValue')).setAttribute('max', '100');
   else $(id('financePlanValue')).removeAttribute('max');
 }
-function financeOpenPlan(month) { modal('Planejamento e reserva', financePlanForm(month || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth'))); }
 function financeSavePlan(month, scope = '') {
   const id = name => name + (scope ? '_' + scope : '');
   financeMutate(() => FinanceCore.setMonthPlan(db, month, { expectedIncome: financeAmount(id('financePlanIncome')), reserveMode: $(id('financePlanMode')).value, reserveValue: financeAmount(id('financePlanValue')), reserveDueDay: Number($(id('financePlanDue')).value) }));

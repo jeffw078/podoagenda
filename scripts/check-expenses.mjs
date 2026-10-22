@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import {createFinanceInsights} from '../finance-insights.js';
-import {validateCardLimits} from '../finance-insights.js';
+import {createFinanceInsights} from '../src/shared/finance-insights.js';
+import {validateCardLimits} from '../src/shared/finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 
-const html=await readFile(new URL('../app.js',import.meta.url),'utf8');
+const html=await readFile(new URL('../src/client/app.js',import.meta.url),'utf8');
 const source=html.slice(html.indexOf('function planExpensePayments('),html.indexOf('function renderPersonal('))+'\n'+html.slice(html.indexOf('function deleteTransaction('),html.indexOf('function totals('));
 const elements=new Map(),alerts=[];
 const element=id=>{
@@ -16,7 +16,7 @@ const element=id=>{
 let items=[{name:'Compra de teste',qty:1,unit:100.01}],saved=0,sequence=0;
 const db={services:[],clients:[],appointments:[],transactions:[],settings:{}};
 const context=vm.createContext({$:element,db,structuredClone,crypto:globalThis.crypto,expenseItems:()=>items,uid:()=>String(++sequence),persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),money:value=>Number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),esc:value=>String(value)});
-vm.runInContext(await readFile(new URL('../finance-core.js',import.meta.url),'utf8'),context);
+vm.runInContext(await readFile(new URL('../src/shared/finance-core.js',import.meta.url),'utf8'),context);
 context.FinanceInsights=createFinanceInsights(context.FinanceCore);context.financeCreditWarningsHtml=warnings=>JSON.stringify(warnings);
 vm.runInContext(source,context);
 const plan=(cents,method,count,month,date)=>context.planExpensePayments(cents,method,count,month,date);

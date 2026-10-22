@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 
-assert.ok(existsSync(new URL('../finance-core.js', import.meta.url)), 'finance-core.js implements the finance contract');
-await import('../finance-core.js');
+assert.ok(existsSync(new URL('../src/shared/finance-core.js', import.meta.url)), 'finance-core.js implements the finance contract');
+await import('../src/shared/finance-core.js');
 const F = globalThis.FinanceCore;
 const fresh = () => ({ transactions: [] });
 const billInput = (extra = {}) => ({ description: 'Internet', category: 'Casa', dueDate: '2026-10-20', expectedAmount: 100, ...extra });

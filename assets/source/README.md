@@ -1,8 +1,8 @@
-# Ícone do Finança Fácil
+# Fontes do ícone do Easy Finance
 
 Ícone atualizado com a ferramenta integrada `image_gen`, em modo de edição a partir do ícone antigo. A agenda em marfim, a marca de confirmação, a moeda dourada e o fundo verde foram preservados. As letras **A, E e S** aparecem discretamente como cabeçalhos dos dias da semana; um **8** aparece como data em um quadrado; o símbolo da moeda é um **8 com traço vertical**, como solicitado pelo usuário.
 
-O novo original está em `financa-facil-original.png`. As versões usadas pelo app são `icon-512.png`, `icon-192.png`, `favicon-32.png` e `/apple-touch-icon.png` (180 pixels), exportadas com reamostragem bicúbica. O primeiro original histórico permanece em `podoagenda-original.png`.
+O original atual está em `financa-facil-original.png`. As versões usadas pelo app estão em `public/icons/` (`icon-512.png`, `icon-192.png` e `favicon-32.png`) e `public/apple-touch-icon.png` (180 pixels), exportadas com reamostragem bicúbica. O primeiro original histórico permanece em `podoagenda-original.png`. Esta pasta guarda as fontes para futuras edições e não é publicada pela Vercel.
 
 O fundo preenche o quadrado e os elementos têm margem para os recortes de ícones do Android. O manifest identifica a versão de 512 pixels como `any maskable`. O sistema do celular aplica o formato externo do ícone.
 

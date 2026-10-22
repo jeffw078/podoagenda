@@ -5,7 +5,7 @@ import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-r
 
 const context = vm.createContext({ console, Date, Intl, Math, JSON, Number, String, Boolean, structuredClone, BigInt,
   crypto: { randomUUID: (() => { let index = 0; return () => `audit-${++index}`; })() } });
-vm.runInContext(fs.readFileSync(new URL('../finance-core.js', import.meta.url), 'utf8'), context);
+vm.runInContext(fs.readFileSync(new URL('../src/shared/finance-core.js', import.meta.url), 'utf8'), context);
 const Core = context.FinanceCore;
 const purchase = () => ({ cardId: 'nubank', description: 'Celular', category: 'Eletrônicos', purchaseDate: '2026-10-10', amount: 30, items: [], installments: [
   { date: '2026-10-01', amount: 15, installmentNumber: 1, installmentCount: 2 },

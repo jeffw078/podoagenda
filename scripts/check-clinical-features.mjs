@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {createClinicFeatures} from '../clinic-features.js';
+import {createClinicFeatures} from '../src/client/clinic-features.js';
 
 const elements=new Map();
 const $=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false});return elements.get(id)};

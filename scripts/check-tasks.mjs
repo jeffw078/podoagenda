@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createTask, completeTask, validateTasks } from '../lib/tasks.js';
-import { createTasksFeature } from '../tasks-ui.js';
+import { createTasksFeature } from '../src/client/tasks-ui.js';
 
 const now = '2026-10-22T13:45:00.000Z';
 const first = createTask(undefined, { title: '  Comprar <script>alert(1)</script>  ' }, 'raquel', now);

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
-const [html,source]=await Promise.all(['index.html','app.js'].map(path=>readFile(new URL('../'+path,import.meta.url),'utf8')));
-assert.match(html,/<script\b[^>]*type="module"[^>]*src="\/app\.bundle\.js/);
+const [html,source]=await Promise.all(['public/index.html','src/client/app.js'].map(path=>readFile(new URL('../'+path,import.meta.url),'utf8')));
+assert.match(html,/<script\b[^>]*type="module"[^>]*src="\/assets\/app\.bundle\.js/);
 assert.equal([...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].some(match=>match[1].trim()),false,'application logic must not be inline');
 assert.doesNotMatch(source,/(?:window|globalThis)\.(?:profile|db|unlocked|openAppointment|openClient)\s*=/);
 const start=source.indexOf('let registered='),end=source.indexOf('function openPersonalAppointment()');

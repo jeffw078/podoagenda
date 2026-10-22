@@ -6,7 +6,7 @@
     }
   },
   "framework": null,
-  "outputDirectory": ".",
+  "outputDirectory": "public",
   "buildCommand": "npm run build",
   "headers": [
     {

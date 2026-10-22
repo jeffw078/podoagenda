@@ -29,10 +29,10 @@ const context = vm.createContext({
   financeCardLimitsForm: month => `<section id="card-limits-placeholder" data-month="${month}"></section>`,
   showSpendingFields() { node('spendingMounted').checked = true; },
 });
-const uiPath = new URL('../finance-ui.js', import.meta.url);
+const uiPath = new URL('../src/client/finance-ui.js', import.meta.url);
 if (fs.existsSync(uiPath)) vm.runInContext(fs.readFileSync(uiPath, 'utf8'), context);
 assert.equal(typeof context.renderPersonalFinance, 'function', 'personal financial dashboard must be available');
-vm.runInContext(fs.readFileSync(new URL('../finance-core.js', import.meta.url), 'utf8'), context);
+vm.runInContext(fs.readFileSync(new URL('../src/shared/finance-core.js', import.meta.url), 'utf8'), context);
 const core = context.FinanceCore;
 core.ensure(context.db);
 core.setCurrentBalance(context.db, 1000, '2026-10-22');

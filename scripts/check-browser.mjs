@@ -9,9 +9,10 @@ import {accountView} from '../lib/passwords.js';
 import {adminAccountView,hasClinicalWrite,mergeFinancialData} from '../lib/access-control.js';
 import {createTask,completeTask} from '../lib/tasks.js';
 import {prepareExpenseRemoval} from '../lib/expense-removals.js';
-import '../finance-core.js';
+import '../src/shared/finance-core.js';
 
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
+const publicRoot=path.join(root,'public');
 const deploymentConfig=JSON.parse(await readFile(path.join(root,'vercel.json'),'utf8'));
 const productionHeaders=deploymentConfig.headers.find(rule=>rule.source==='/(.*)')?.headers||[];
 assert.ok(productionHeaders.some(header=>header.key.toLowerCase()==='content-security-policy'&&header.value.includes("script-src 'self'")), 'Browser server must enforce the deployed script policy');
@@ -81,8 +82,8 @@ const server=createServer(async(req,res)=>{
    return send(400,{error:'Operação inesperada'});
   }
   assets.push({username:signedIn,url:req.url});
-  const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname),file=path.resolve(root,pathname==='/'?'index.html':'.'+pathname);
-  if(!file.startsWith(root+path.sep)||pathname.split('/').some(part=>part.startsWith('.'))){res.statusCode=403;return res.end()}
+  const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname),file=path.resolve(publicRoot,pathname==='/'?'index.html':'.'+pathname);
+  if(!file.startsWith(publicRoot+path.sep)||pathname.split('/').some(part=>part.startsWith('.'))){res.statusCode=403;return res.end()}
   res.setHeader('Content-Type',({'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png'})[path.extname(file)]||'text/plain');
   res.end(await readFile(file));
  }catch(error){res.statusCode=500;res.end(String(error))}
@@ -225,7 +226,7 @@ try{
  await escape();
  assert.equal(await evaluate("fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'adminRemoveExpense',targetProfile:'podo',revision:0,kind:'credit',id:'none',reason:'test'})}).then(response=>response.status)"),403,'Raquel cannot call admin expense removal');
  assert.ok(assets.some(item=>item.username==='raquel'&&item.url.includes('/views/clinic.html')));
- assert.ok(assets.some(item=>item.username==='raquel'&&item.url.includes('/clinic-features.js')));
+ assert.ok(assets.some(item=>item.username==='raquel'&&item.url.includes('/assets/clinic-features.js')));
  assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList').length"),4,'Clinical account mounts its own views');
  await nav('clientes');await button('+ Cliente');
  await input('#cName','Cliente risco');await input('#cPhone','47999999999');await input('#cDiabetes','type2');await input('#cHypertension',true);await input('#cCirculationProblems',true);await input('#cAnticoagulants',true);await input('#cAllergies','Látex & iodo');await submit();

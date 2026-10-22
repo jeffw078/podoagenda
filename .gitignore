@@ -11,3 +11,5 @@ node_modules/
 .account-reviewer*.local.json
 docs/*.csv
 .bank-import*.local.json
+public/assets/
+public/views/

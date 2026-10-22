@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
-const source=await readFile(new URL('../dashboard-ui.js',import.meta.url),'utf8').catch(()=> '');
-const core=await readFile(new URL('../finance-core.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../src/client/dashboard-ui.js',import.meta.url),'utf8').catch(()=> '');
+const core=await readFile(new URL('../src/shared/finance-core.js',import.meta.url),'utf8');
 const clone=value=>JSON.parse(JSON.stringify(value));
 function fixture(){
  const elements=new Map(),calls=[],alerts=[];

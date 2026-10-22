@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {parseCommands,installActionEvents} from '../ui-actions.js';
+import {parseCommands,installActionEvents} from '../src/client/ui-actions.js';
 
 assert.deepEqual(parseCommands('event.preventDefault();closeModal();openClient("Ana \\"Silva\\"",-1,true,null)'),[
  {name:'closeModal',args:[]},{name:'openClient',args:['Ana "Silva"',-1,true,null]}

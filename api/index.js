@@ -5,8 +5,8 @@ import { schemaAwareSql } from '../lib/database-schema.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
 import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis } from '../lib/access-control.js';
-import '../finance-core.js';
-import { validateCardLimits } from '../finance-insights.js';
+import '../src/shared/finance-core.js';
+import { validateCardLimits } from '../src/shared/finance-insights.js';
 import { createTask, completeTask, validateTasks } from '../lib/tasks.js';
 import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-removals.js';
 

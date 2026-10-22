@@ -8,10 +8,10 @@ import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
 import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis, financialView } from '../lib/access-control.js';
-import { validateCardLimits } from '../finance-insights.js';
+import { validateCardLimits } from '../src/shared/finance-insights.js';
 import { createTask, completeTask, validateTasks } from '../lib/tasks.js';
 import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-removals.js';
-import '../finance-core.js';
+import '../src/shared/finance-core.js';
 import {prepareInvoiceImport} from '../lib/card-invoice-import.js';
 
 const db=new PGlite();
