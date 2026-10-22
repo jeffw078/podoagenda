@@ -8,6 +8,9 @@ import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
 import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis, financialView } from '../lib/access-control.js';
+import { validateCardLimits } from '../finance-insights.js';
+import { createTask, completeTask, validateTasks } from '../lib/tasks.js';
+import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-removals.js';
 import '../finance-core.js';
 import {prepareInvoiceImport} from '../lib/card-invoice-import.js';
 
@@ -29,7 +32,7 @@ try {
     catch(error){await db.exec('ROLLBACK');throw error;}
   };
   const {publicKey,privateKey}=generateKeyPairSync('ed25519');
-  const deps={neon:()=>sql,randomBytes,createHash,readDatabaseUrl,databaseFailure,schemaAwareSql,hashPassword,passMatches,accountView,hasClinicalWrite,mergeFinancialData,adminAccountView,validAnamnesis,verifyProvisioning:body=>verifyProvisioning(body,Date.now(),publicKey)};
+  const deps={neon:()=>sql,randomBytes,createHash,readDatabaseUrl,databaseFailure,schemaAwareSql,hashPassword,passMatches,accountView,hasClinicalWrite,mergeFinancialData,adminAccountView,validAnamnesis,validateCardLimits,createTask,completeTask,validateTasks,prepareExpenseRemoval,expenseHistoryUnchanged,verifyProvisioning:body=>verifyProvisioning(body,Date.now(),publicKey)};
   const source=(await readFile(new URL('../api/index.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace('export default async function handler','async function handler');
   const factory=vm.runInNewContext('(function(deps){const {'+Object.keys(deps).join(',')+'}=deps;\n'+source+'\nreturn handler;})',{FinanceCore:globalThis.FinanceCore,crypto:webcrypto,Buffer,URL,process:{env:{DATABASE_URL:'postgresql://test:test@db.example/test',SETUP_CODE:'Example-Setup-Only!'}},console});
   const handler=factory(deps);
@@ -194,11 +197,13 @@ try {
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'podo',revision:openingSaved.body.revision,finance:rewrittenOpening.finance},jefferson.cookie)).status,400);
   const corrected=structuredClone(financeData);
   globalThis.FinanceCore.setCurrentBalance(corrected,950,'2026-10-22','Correção do saldo informado');
+  assert.equal(expenseHistoryUnchanged(financeData,corrected),true,'opening balance corrections preserve expense history');
+  assert.equal(globalThis.FinanceCore.validateFinanceChange(financeData,corrected),true,'opening balance correction passes the finance core validator');
   const withoutReason=structuredClone(corrected);withoutReason.finance.adjustments[0].reason='  ';
   assert.equal((await request({action:'save',revision:openingSaved.body.revision,data:withoutReason},raquel.cookie)).status,400);
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'podo',revision:openingSaved.body.revision,finance:withoutReason.finance},jefferson.cookie)).status,400);
   const correctionSaved=await request({action:'save',revision:openingSaved.body.revision,data:corrected},raquel.cookie);
-  assert.equal(correctionSaved.status,200);
+  assert.equal(correctionSaved.status,200,JSON.stringify(correctionSaved.body));
   assert.equal((await request({action:'save',revision:openingSaved.body.revision,data:financeData},raquel.cookie)).status,409,'An old device receives the revision conflict before audit comparison');
   const rewrittenAudit=structuredClone(corrected);rewrittenAudit.finance.adjustments[0].reason='Outro motivo';
   assert.equal((await request({action:'save',revision:correctionSaved.body.revision,data:rewrittenAudit},raquel.cookie)).status,400);
@@ -276,6 +281,62 @@ try {
   assert.deepEqual(importedRoundtrip.data.transactions,personalInvoices.data.transactions);
   assert.equal(prepareInvoiceImport(importedRoundtrip.data,{username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2099-01',amount:50.01,dueDate:'2099-01-07'},{cardId:'mercado_pago',month:'2099-01',amount:25,dueDate:'2099-01-17'}]}).changed,false);
   console.log('OK PostgreSQL: assisted card invoice import and idempotent roundtrip, preserving cash transactions.');
+
+  const beforeRemovalJeff=(await request({action:'me'},jefferson.cookie)).body;
+  const beforeRemovalRaquel=(await request({action:'me'},raquel.cookie)).body;
+  const targetPurchase=beforeRemovalRaquel.data.finance.creditPurchases[0];
+  const paidCardBill=beforeRemovalRaquel.data.finance.bills.find(bill=>bill.status==='paid'&&bill.sourceId==='card:nubank');
+  const paidBillTransaction=beforeRemovalRaquel.data.transactions.find(row=>row.id===paidCardBill?.transactionId);
+  const futureCardBill=beforeRemovalRaquel.data.finance.bills.find(bill=>bill.month==='2027-01'&&bill.status==='pending'&&bill.sourceId==='card:nubank');
+  assert.ok(targetPurchase&&paidCardBill&&paidBillTransaction&&futureCardBill,'Test account has a paid installment and a future pending invoice');
+  assert.equal(futureCardBill.expectedAmount,48,'Future pending invoice includes the edited purchase installment');
+
+  const deleteExpenseInSave=structuredClone(beforeRemovalRaquel.data);
+  const expenseIndex=deleteExpenseInSave.transactions.findIndex(row=>row.id==='expense-preserved');
+  assert.ok(expenseIndex>=0,'Test account has a non-invoice expense');
+  deleteExpenseInSave.transactions.splice(expenseIndex,1);
+  assert.equal((await request({action:'save',revision:beforeRemovalRaquel.revision,data:deleteExpenseInSave},raquel.cookie)).status,400,'Ordinary saves cannot remove an expense');
+
+  const deleteCreditInSave=structuredClone(beforeRemovalRaquel.data);
+  deleteCreditInSave.finance.creditPurchases=deleteCreditInSave.finance.creditPurchases.filter(row=>row.id!==targetPurchase.id);
+  assert.equal((await request({action:'save',revision:beforeRemovalRaquel.revision,data:deleteCreditInSave},raquel.cookie)).status,400,'Ordinary saves cannot remove a credit purchase');
+  assert.equal((await request({action:'adminRemoveExpense',targetProfile:'podo',revision:beforeRemovalRaquel.revision,kind:'credit',id:targetPurchase.id,reason:'Teste sem permissÃ£o'},raquel.cookie)).status,403,'Only Jefferson can remove expenses');
+  assert.equal((await request({action:'adminRemoveExpense',targetProfile:'podo',revision:beforeRemovalRaquel.revision-1,kind:'credit',id:targetPurchase.id,reason:'Conflito'},jefferson.cookie)).status,409,'Removal uses the target account revision');
+
+  const removedCredit=await request({action:'adminRemoveExpense',targetProfile:'podo',revision:beforeRemovalRaquel.revision,kind:'credit',id:targetPurchase.id,reason:'  Compra registrada por engano  ',actor:'filla',removedAt:'2000-01-01T00:00:00.000Z'},jefferson.cookie);
+  assert.equal(removedCredit.status,200);
+  assert.equal(removedCredit.body.revision,beforeRemovalRaquel.revision+1);
+  assert.equal(removedCredit.body.data.finance.creditPurchases.some(row=>row.id===targetPurchase.id),false);
+  assert.equal(removedCredit.body.data.finance.creditEdits.some(row=>row.purchaseId===targetPurchase.id),false);
+  assert.equal(removedCredit.body.data.finance.bills.find(bill=>bill.id===paidCardBill.id).status,'paid','Removing a purchase preserves its already paid invoice');
+  assert.deepEqual(removedCredit.body.data.transactions.find(row=>row.id===paidBillTransaction.id),paidBillTransaction,'Paid invoice cash debit is preserved');
+  const recalculatedInvoice=removedCredit.body.data.finance.bills.find(bill=>bill.id===futureCardBill.id);
+  assert.equal(recalculatedInvoice.status,'pending');
+  assert.equal(recalculatedInvoice.expectedAmount,0,'Future pending invoice recalculates after credit removal');
+  const creditAudit=removedCredit.body.data.finance.expenseRemovals.at(-1);
+  assert.equal(creditAudit.kind,'credit');assert.equal(creditAudit.targetId,targetPurchase.id);assert.equal(creditAudit.actor,'jefferson');assert.equal(creditAudit.reason,'Compra registrada por engano');
+  assert.notEqual(creditAudit.removedAt,'2000-01-01T00:00:00.000Z');assert.ok(Number.isFinite(Date.parse(creditAudit.removedAt)),'Audit timestamp is server-generated');
+  assert.equal(creditAudit.record.purchase.id,targetPurchase.id);assert.ok(creditAudit.record.creditEdits.length>0,'Removed purchase and its edit history are retained in the audit');
+  assert.deepEqual((await request({action:'me'},jefferson.cookie)).body.data,beforeRemovalJeff.data,'Removing a clinic purchase leaves Jefferson financial data unchanged');
+  const afterCreditRemovalRaquel=(await request({action:'me'},raquel.cookie)).body;
+  assert.deepEqual(afterCreditRemovalRaquel.data.clients,beforeRemovalRaquel.data.clients);
+  assert.deepEqual(afterCreditRemovalRaquel.data.appointments,beforeRemovalRaquel.data.appointments);
+  const forgedRemovalAudit=structuredClone(afterCreditRemovalRaquel.data);
+  forgedRemovalAudit.finance.expenseRemovals[0].actor='raquel';
+  assert.equal((await request({action:'save',revision:afterCreditRemovalRaquel.revision,data:forgedRemovalAudit},raquel.cookie)).status,400,'Normal saves cannot rewrite removal audit metadata');
+
+  const personalPaidExpense=beforeRemovalJeff.data.transactions.find(row=>row.type==='expense'&&row.billId);
+  assert.ok(personalPaidExpense,'Jefferson has a paid invoice expense for a transaction-removal check');
+  const removedPersonalExpense=await request({action:'adminRemoveExpense',targetProfile:'personal',revision:beforeRemovalJeff.revision,kind:'transaction',id:personalPaidExpense.id,reason:'Pagamento duplicado',actor:'raquel'},jefferson.cookie);
+  assert.equal(removedPersonalExpense.status,200);
+  assert.equal(removedPersonalExpense.body.data.transactions.some(row=>row.id===personalPaidExpense.id),false);
+  assert.equal(removedPersonalExpense.body.data.finance.bills.find(bill=>bill.id===personalPaidExpense.billId).status,'pending','Removing an invoice payment reopens its bill');
+  const personalAudit=removedPersonalExpense.body.data.finance.expenseRemovals.at(-1);
+  assert.equal(personalAudit.actor,'jefferson');assert.equal(personalAudit.targetId,personalPaidExpense.id);assert.notEqual(personalAudit.actor,'raquel');
+  assert.equal((await request({action:'me'},raquel.cookie)).body.data.finance.creditPurchases.length,0,'Removing Jefferson expense does not affect Raquel purchase removal');
+  assert.equal((await request({action:'adminRemoveExpense',targetProfile:'invalid',revision:0,kind:'transaction',id:'missing',reason:'Teste'},jefferson.cookie)).status,400);
+  console.log('OK PostgreSQL: audited expense removal is Jefferson-only, revision-checked, account-isolated, and preserves paid cash while recalculating future card debt.');
+
   const ownersBefore=await db.query("SELECT username,data,revision FROM studio_accounts WHERE username IN ('jefferson','raquel') ORDER BY username");
   const reviewerState=(await request({action:'me'},reviewerCookie)).body;
   assert.deepEqual(reviewerState.data,financialView(reviewerData),'A tester never receives clinical data');

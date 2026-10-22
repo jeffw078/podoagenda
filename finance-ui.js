@@ -76,43 +76,30 @@ function renderPersonalFinance(targetId = 'personalFinanceContent', monthId = 'p
     ${financeKpi('Gastos do mês', summary.spending, 'Compras e gastos de consumo')}
     ${financeKpi('Reservado no mês', summary.reserved, `Meta: ${esc(money(summary.reserveExpected))}`)}
   </div>
-  <div class="actions finance-quick-actions"><button type="button" class="btn" onclick="openIncome()">+ Entrada</button><button type="button" class="btn secondary" onclick="openFinanceExpenses('bills')">Contas e gastos</button><button type="button" class="btn outline" onclick="financeOpenBalance()">Conferir saldo</button></div>
-  <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3><button class="btn outline small" onclick="financeOpenPlan(${financeArgument(month)})">Planejar mês</button></div>
+  ${financeIndicatorsHtml(month)}
+  <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3></div>
     <dl class="finance-summary"><div><dt>Renda mensal prevista</dt><dd>${plan ? esc(money(plan.expectedIncome)) : 'Não informada'}</dd></div><div><dt>Entradas lançadas</dt><dd>${esc(money(summary.income))}</dd></div><div><dt>Contas pagas</dt><dd>${esc(money(summary.billsPaid))}</dd></div><div><dt>Disponível após as contas previstas</dt><dd>${esc(money(summary.freeAfterBills))}</dd></div></dl>${unknown ? '<p class="notice warn">Existem contas sem valor previsto. O disponível após as contas ainda pode mudar.</p>' : ''}
     ${!db.finance.openingBalance ? '<button type="button" class="btn secondary full" onclick="financeOpenBalance()">Cadastrar meu saldo atual</button>' : ''}
   </section><section class="card"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills')">Ver / adicionar</button></div>${financeBillRows(bills, true)}</section></div>${financeCreditPurchasesHtml(month)}
   <section class="card"><h3>Movimentações do mês</h3>${transactions.length ? transactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || t.category || 'Lançamento')}</strong><small>${financeDateLabel(t.date)} · ${esc(t.financeKind === 'reserve' ? 'Reserva' : t.financeKind === 'bill' ? 'Conta paga' : t.category || 'Movimentação')}</small></div><strong class="${t.type === 'income' ? 'positive' : 'negative'}">${t.type === 'income' ? '+' : '−'} ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Sem movimentações neste mês.</p>'}</section>`;
 }
 
-function openFinanceExpenses(tab = 'bills', preserveMonth = false) {
+function openFinanceExpenses(tab = 'spending', preserveMonth = false) {
   const spending = tab === 'spending' || tab === 'gastos';
   const month = (preserveMonth && financeBillsSelectedMonth) || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth');
   financeBillsSelectedMonth = month;
-  const tabs = `<div class="tabs finance-tabs" aria-label="Tipo de despesa"><button type="button" class="${spending ? '' : 'selected'}" aria-pressed="${!spending}" onclick="openFinanceExpenses('bills',true)">Contas</button><button type="button" class="${spending ? 'selected' : ''}" aria-pressed="${spending}" onclick="openFinanceExpenses('spending',true)">Gastos</button></div>`;
+  const tabs = `<div class="tabs finance-tabs" aria-label="Tipo de despesa"><button type="button" class="${spending ? 'selected' : ''}" aria-pressed="${spending}" onclick="openFinanceExpenses('spending',true)">Gastos diários</button><button type="button" class="${spending ? '' : 'selected'}" aria-pressed="${!spending}" onclick="openFinanceExpenses('bills',true)">Contas do mês</button></div>`;
   if (spending) {
-    modal('Contas e gastos', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, escolha o cartão e o mês de cada fatura.</p>' + renderSpendingForm()+financeCreditPurchasesHtml(month));
+    modal('Gastos diários e contas do mês', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, escolha o cartão e o mês de cada fatura.</p>' + renderSpendingForm()+financeCreditPurchasesHtml(month));
     showSpendingFields();
     return;
   }
   const bills = financeSync(month);
-  modal('Contas e gastos', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required onchange="financeChangeBillsMonth()"')}<button type="button" class="btn small" onclick="financeOpenBill()">+ Conta avulsa</button></div><p class="footer-note">Cadastre vencimentos aqui. Ao pagar, informe o valor real; a previsão fica preservada.</p><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" onclick="financeOpenRecurring()">+ Conta recorrente</button>`);
+  modal('Gastos diários e contas do mês', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required onchange="financeChangeBillsMonth()"')}</div><p class="footer-note">Ao pagar, informe o valor real; a previsão fica preservada. Configure novas contas em recorrências.</p><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" onclick="financeOpenRecurring()">+ Conta recorrente</button>`);
 }
 function financeChangeBillsMonth() { financeBillsSelectedMonth = financeMonth('financeBillsMonth'); openFinanceExpenses('bills', true); }
 function financeCategories(selected = '') {
   return [...new Set([...expenseCategories, 'Reserva', selected].filter(Boolean))].map(category => `<option value="${esc(category)}" ${category === selected ? 'selected' : ''}>${esc(category)}</option>`).join('');
-}
-function financeOpenBill() {
-  const month = financeBillsSelectedMonth || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth');
-  modal('Nova conta', `<form class="fields" onsubmit="event.preventDefault();financeSaveBill()">${financeInput('Descrição', 'financeBillDescription', 'text', '', 'required maxlength="180"')}
-    <div class="fields two">${financeInput('Vencimento', 'financeBillDue', 'date', `${month}-01`, 'required')}${financeInput('Valor previsto (R$), se conhecido', 'financeBillAmount', 'number', '', 'min="0" step="0.01" placeholder="Sem previsão"')}</div>
-    <label class="field">Categoria<select id="financeBillCategory">${financeCategories('Outros')}</select></label><p class="footer-note">Deixe o valor vazio se ainda não souber quanto virá. Informe o valor efetivo na hora de pagar.</p><button type="submit" class="btn full">Cadastrar conta</button></form>`);
-}
-function financeSaveBill() {
-  financeMutate(() => {
-    const dueDate = $('financeBillDue').value;
-    FinanceCore.createBill(db, { description: $('financeBillDescription').value.trim(), category: $('financeBillCategory').value, dueDate, month: dueDate.slice(0, 7), expectedAmount: financeAmount('financeBillAmount', true) });
-    financeBillsSelectedMonth = dueDate.slice(0, 7);
-  }, () => openFinanceExpenses('bills', true));
 }
 function financeOpenPayment(id) {
   const bill = FinanceCore.ensure(db).bills.find(item => item.id === id);
@@ -158,8 +145,8 @@ function renderReservePage() {
   const month = financeMonth('reserveMonth');
   const bills = financeSync(month).filter(item => item.source === 'reserve');
   const summary = FinanceCore.monthlySummary(db, month, dateToday);
-  const percent = summary.reserveExpected > 0 ? Math.min(100, Math.max(0, summary.reserved / summary.reserveExpected * 100)) : 0;
-  target.innerHTML = `<div class="finance-kpis finance-kpis-three">${financeKpi('Meta do mês', summary.reserveExpected)}${financeKpi('Já reservado', summary.reserved)}${financeKpi('Falta reservar', Math.max(0, summary.reserveExpected - summary.reserved))}</div><section class="card"><h3>Sua reserva em ${esc(financeMonthLabel(month))}</h3><div class="finance-reserve-progress" role="progressbar" aria-label="Progresso da reserva mensal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}"><span style="width:${percent}%"></span></div><p class="footer-note">${Math.round(percent)}% da meta reservado. A reserva paga reduz o disponível e fica separada dos gastos de consumo.</p>${financeBillRows(bills)}</section><section class="card"><h3>Planejar reserva mensal</h3>${financePlanForm(month, 'reserve')}</section>`;
+  const reserveTransactions = (db.transactions || []).filter(t => t.financeKind === 'reserve' && t.date?.slice(0, 7) === month).sort((a, b) => b.date.localeCompare(a.date));
+  target.innerHTML = `<div class="finance-kpis finance-kpis-three">${financeKpi('Reservado no mês', summary.reserved, 'Valor efetivamente lançado e pago.')}</div><section class="card"><h3>Histórico da reserva em ${esc(financeMonthLabel(month))}</h3>${reserveTransactions.length ? reserveTransactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || 'Reserva')}</strong><small>${financeDateLabel(t.date)} · Reserva</small></div><strong class="negative">− ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Nenhuma reserva lançada neste mês.</p>'}${bills.length ? `<h3>Contas de reserva do mês</h3>${financeBillRows(bills)}</section>` : '</section>'}`;
 }
 
 function financeOpenBalance() {
@@ -205,6 +192,6 @@ function renderFinanceSettings() {
   financeSync(month);
   const finance = FinanceCore.ensure(db);
   target.innerHTML = `<section class="card"><div class="finance-heading"><h3>Planejamento financeiro</h3>${financeInput('Mês', 'financeSettingsMonth', 'month', month, 'required onchange="financeSettingsMonthChanged()"')}</div>${financePlanForm(month, 'settings')}</section>
-    <section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}</section>
+    ${financeCardLimitsForm(month)}<section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}${financeReserveRecurringHtml(month)}</section>
     <section class="card"><div class="finance-heading"><h3>Saldo atual e histórico</h3><button type="button" class="btn outline small" onclick="financeOpenBalance()">${finance.openingBalance ? 'Conferir / corrigir' : 'Cadastrar saldo'}</button></div><div class="finance-balance-value">${esc(money(FinanceCore.currentBalance(db, dateToday)))}</div><p class="footer-note">Saldo cadastrado atualizado pelos lançamentos até ${financeDateLabel(dateToday)}.</p>${finance.openingBalance ? `<div class="finance-audit"><strong>Ponto inicial · ${financeDateLabel(finance.openingBalance.date)}</strong><span>${esc(money(finance.openingBalance.amount))}</span></div>` : '<p class="notice">O saldo inicial ainda não foi cadastrado.</p>'}${[...finance.adjustments].reverse().map(adjustment => `<article class="finance-audit"><div><strong>${financeDateLabel(adjustment.date)} · ${esc(adjustment.reason)}</strong><small>${esc(money(adjustment.before))} → ${esc(money(adjustment.after))}</small></div><span>${adjustment.delta >= 0 ? '+' : '−'} ${esc(money(Math.abs(adjustment.delta)))}</span></article>`).join('')}<p class="footer-note">O ponto inicial e as correções anteriores são preservados. Corrigir saldo exige um motivo e não cria receita ou despesa.</p></section>`;
 }

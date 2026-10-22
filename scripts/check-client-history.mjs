@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import {createClinicFeatures} from '../clinic-features.js';
+import {validateCardLimits} from '../finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 
@@ -35,7 +36,7 @@ db.appointments[1].status='cancelado';context.openCompleteAppointment('a2');asse
 for(const [id,value] of Object.entries({apClient:'c1',apDate:'2026-10-22',apTime:'09:00',apStatus:'concluido',apTreatmentNotes:'Relato pelo formulário de edição'}))element(id).value=value;
 context.saveAppointment('');const edited=db.appointments.at(-1);assert.equal(edited.status,'concluido');assert.equal(edited.treatmentNotes,'Relato pelo formulário de edição');assert.equal(edited.serviceSnapshot[0].name,'Serviço renomeado');assert.ok(edited.completedAt);
 const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
-const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue});
+const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue,validateCardLimits});
 assert.equal(validate(db),true);edited.treatmentNotes=42;assert.equal(validate(db),false);edited.treatmentNotes='x'.repeat(10001);assert.equal(validate(db),false);
 assert.ok(context.clientHistoryHtml('unknown').includes('Nenhum atendimento registrado'));
 console.log('OK: histórico por cliente, conclusão com relato, edição, serviços preservados, registros antigos e proteção do texto.');

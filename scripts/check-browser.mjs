@@ -7,6 +7,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {accountView} from '../lib/passwords.js';
 import {adminAccountView,hasClinicalWrite,mergeFinancialData} from '../lib/access-control.js';
+import {createTask,completeTask} from '../lib/tasks.js';
+import {prepareExpenseRemoval} from '../lib/expense-removals.js';
 import '../finance-core.js';
 
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
@@ -23,6 +25,8 @@ const accounts=[{profile:'podo',username:'raquel',data:initial(),revision:0},{pr
 accounts[0].data.clients.push({id:'private-client',name:'Clinical secret must stay private',phone:'47988888888',notes:'Private clinical notes'});
 const owner=accounts[1],clinic=accounts[0],friend=accounts[2];
 let signedIn='jefferson';const requests=[],wire=[],assets=[],acceptedSaves=[];
+let ownersTasks=[],ownersTasksRevision=0;
+const isolatedTasks=new Map([['filla',{tasks:[],revision:0}]]);
 const server=createServer(async(req,res)=>{
  try{
   res.setHeader('Cache-Control','no-store');
@@ -44,7 +48,30 @@ const server=createServer(async(req,res)=>{
     if(!next||!FinanceCore.validateFinanceChange(current.data,next))return send(400,{error:'Financeiro inválido no navegador'});
     acceptedSaves.push({username:current.username,...clone(input)});current.data=next;current.revision++;return send(200,{revision:current.revision});
    }
+   if(['tasksList','tasksCreate','tasksComplete'].includes(input.action)){
+    const shared=(current.username==='jefferson'&&current.profile==='personal')||(current.username==='raquel'&&current.profile==='podo');
+    const list=shared?{tasks:ownersTasks,revision:ownersTasksRevision}:isolatedTasks.get(current.username)||{tasks:[],revision:0};
+    if(input.action==='tasksList')return send(200,clone(list));
+    if(!Number.isInteger(input.revision)||input.revision!==list.revision)return send(409,{error:'Tarefas atualizadas em outro aparelho.'});
+    let tasks;
+    try{tasks=input.action==='tasksCreate'?createTask(list.tasks,{title:input.title,dueDate:input.dueDate},current.username,new Date().toISOString()):completeTask(list.tasks,input.id,current.username,new Date().toISOString())}
+    catch(error){return send(400,{error:error.message})}
+    if(JSON.stringify(tasks)===JSON.stringify(list.tasks))return send(200,clone(list));
+    if(shared){ownersTasks=tasks;ownersTasksRevision++}else isolatedTasks.set(current.username,{tasks,revision:list.revision+1});
+    return send(200,clone(shared?{tasks:ownersTasks,revision:ownersTasksRevision}:isolatedTasks.get(current.username)));
+   }
    if(current.username!=='jefferson')return send(403,{error:'Acesso restrito'});
+   if(input.action==='adminRemoveExpense'){
+    const targetProfile=input.targetProfile==='personal'?'personal':input.targetProfile==='podo'?'podo':null;
+    const target=targetProfile==='personal'?owner:targetProfile==='podo'?clinic:null;
+    if(!target||!Number.isInteger(input.revision))return send(400,{error:'Dados inválidos.'});
+    if(input.revision!==target.revision)return send(409,{error:'Dados atualizados em outro aparelho.'});
+    try{
+     const prepared=prepareExpenseRemoval(target.data,{kind:input.kind,id:input.id,reason:input.reason},current.username,new Date().toISOString(),FinanceCore);
+     target.data=prepared.data;target.revision++;
+     return send(200,adminAccountView(target));
+    }catch(error){return send(400,{error:error.message})}
+   }
    if(input.action==='adminOverview')return send(200,{accounts:accounts.filter(account=>['jefferson','raquel'].includes(account.username)).map(adminAccountView)});
    if(input.action==='adminSaveSettings'){
     const target=accounts.find(a=>a.username===(input.targetProfile==='personal'?'jefferson':'raquel'));
@@ -90,26 +117,42 @@ try{
  const login=async username=>{await input('#authUsername',username);await input('#authPassword','SyntheticBrowserOnly123!');await submit('#authForm');await waitFor(`document.querySelector('#authVeil').classList.contains('hidden')&&document.querySelector('#headerGreeting').textContent===${JSON.stringify('Olá, '+username.charAt(0).toUpperCase()+username.slice(1))}`)};
  const assertPrivate=async()=>{
   assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList,template').length"),0,'Personal DOM has no clinical views or templates');
-  assert.deepEqual(await evaluate("['db','profile','unlocked','openAppointment','saveClient','navigate'].map(key=>typeof window[key])"),Array(6).fill('undefined'),'Application state and handlers stay module-private');
+  assert.deepEqual(await evaluate("['db','profile','unlocked','openAppointment','saveClient','navigate','openTasks','saveTask','completeTask','dashboardOpenExpenses'].map(key=>typeof window[key])"),Array(10).fill('undefined'),'Application state and handlers stay module-private');
   await evaluate("window.profile='podo';for(const code of [\"openClient()\",\"navigate('agenda')\"]){const button=document.createElement('button');button.dataset.onclick=code;document.body.append(button);button.click();button.remove()}delete window.profile");
   assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList,#cName').length"),0,'Forged public profile and handler attributes do not mount clinical UI');
  };
  await waitFor("document.querySelector('#personalFinanceContent .kpi')&&document.querySelector('#authVeil').classList.contains('hidden')");
  await evaluate('window.browserAlerts=[];window.alert=message=>browserAlerts.push(message);window.confirm=()=>true;window.browserOpened=[];window.open=url=>browserOpened.push(url);window.browserCspViolations=[];document.addEventListener("securitypolicyviolation",event=>browserCspViolations.push({directive:event.violatedDirective,blocked:event.blockedURI}))');
  assert.equal(await evaluate("document.querySelector('#headerGreeting').textContent"),'Olá, Jefferson');
+ assert.equal(await evaluate("document.querySelector('.app-brand span').textContent"),'Easy Finance');
+ assert.equal(await evaluate("document.querySelector('#profileIcon').tagName"),'BUTTON','TODO task shortcut is a button');
+ assert.equal(await evaluate("document.querySelector('#profileIcon').disabled"),false,'TODO task shortcut enables after login');
+ assert.equal(await evaluate("document.querySelector('#profileIcon').getAttribute('aria-label')"),'Abrir tarefas TODO');
+ assert.ok(await evaluate("['Previsão de entradas e saídas','Gastos por categoria','Meta acumulada da reserva'].every(label=>document.querySelector('#personalFinanceContent').textContent.includes(label))"),'monthly forecast, categories, and reserve indicators render');
  await assertPrivate();
  assert.ok(!assets.some(item=>item.username==='jefferson'&&/clinic(?:-features\.js|\.html)/.test(item.url)),'Personal login does not fetch clinical views or feature module');
  assert.ok(wire.filter(item=>item.username==='jefferson'&&item.action==='me').every(item=>!('clients'in item.body.data)&&!('settings'in item.body.data)&&!('services'in item.body.data)&&!('appointments'in item.body.data)),'Personal wire data excludes clinical keys');
- await button('Conferir saldo');await input('#financeBalanceAmount','1000');await submit();await waitSaved(()=>owner.data.finance?.openingBalance?.amount===1000);
- await nav('reserva');await input('#financePlanIncome_reserve','3000');await input('#financePlanMode_reserve','percentage');await input('#financePlanValue_reserve','10');await input('#financePlanDue_reserve','15');await submit('#reserveContent form');await waitSaved(()=>owner.data.finance?.bills.some(bill=>bill.source==='reserve'&&bill.expectedAmount===300));
+ await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
+ await input('#taskTitle','Revisar agenda compartilhada');await input('#taskDueDate','2026-11-05');await submit();await waitSaved(()=>ownersTasks.length===1);
+ assert.equal(ownersTasks[0].createdBy,'jefferson','task creator comes from the authenticated owner');
+ assert.equal(ownersTasks[0].dueDate,'2026-11-05');
+ await nav('configuracoes');await button('Cadastrar saldo');await input('#financeBalanceAmount','1000');await submit();await waitSaved(()=>owner.data.finance?.openingBalance?.amount===1000);
+ await input('#financePlanIncome_settings','3000');await input('#financePlanMode_settings','percentage');await input('#financePlanValue_settings','10');await input('#financePlanDue_settings','15');await submit('#financeSettingsContent form');await waitSaved(()=>owner.data.finance?.bills.some(bill=>bill.source==='reserve'&&bill.expectedAmount===300));
+ assert.ok(await evaluate("document.querySelector('#financeSettingsContent').textContent.includes('Reserva mensal')"),'monthly reserve goal appears among settings recurring items');
+ await input('#financeSettingsMonth',month);await input('#cardLimit_nubank','20');await button('Salvar limites do mês');await waitSaved(()=>owner.data.finance?.cardLimits?.some(limit=>limit.month===month&&limit.cardId==='nubank'&&limit.amount===20));
+ await nav('reserva');
  await click('#reserveContent .finance-bill button');await input('#financePayMethod','pix');await submit();await waitSaved(()=>owner.data.transactions.length===1);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),700);
- await nav('pessoal');await button('Contas e gastos');await button('Gastos','document.querySelector("#modalContent")');
+ await nav('pessoal');await button('− Saídas','document.querySelector("#pessoal")');await waitFor("document.querySelector('#modalContent').textContent.includes('Gastos diários')");
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.indexOf('Gastos diários')<document.querySelector('#modalContent').textContent.indexOf('Contas do mês')"),'spending is the first expenses tab');
  await input('.elname','Mercado');await input('.elunit','25');await input('#eDescription','Compras');await input('#ePaymentMethod','cash');await button('Salvar despesa','document.querySelector("#modalContent")');await waitSaved(()=>owner.data.transactions.length===2);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),675);
- await button('Contas e gastos');await button('Gastos','document.querySelector("#modalContent")');await input('.elname','Compra parcelada');await input('.elunit','100.01');await input('#eDescription','Notebook parcelado');await input('#ePaymentMethod','credit');await input('#eInstallments','3');
+ await button('− Saídas','document.querySelector("#pessoal")');await waitFor("document.querySelector('#modalContent').textContent.includes('Gastos diários')");await input('.elname','Compra parcelada');await input('.elunit','100.01');await input('#eDescription','Notebook parcelado');await input('#ePaymentMethod','credit');await input('#eInstallments','3');
  assert.ok(await evaluate("document.querySelector('#eCreditCard').required&&!document.querySelector('#eCreditCard').disabled"));
- await input('#eCreditCard','nubank');await button('Salvar despesa','document.querySelector("#modalContent")');await waitSaved(()=>owner.data.finance.creditPurchases.length===1);
+ await input('#eCreditCard','nubank');
+ assert.ok(await evaluate("document.querySelector('#expensePaymentPreview').textContent.includes('limite')"),'over-limit warning appears in the installment preview');
+ assert.ok(await evaluate("![...document.querySelectorAll('#modalContent button')].find(button=>button.textContent.trim()==='Salvar despesa').disabled"),'card limit warning does not block saving');
+ await button('Salvar despesa','document.querySelector("#modalContent")');await waitSaved(()=>owner.data.finance.creditPurchases.length===1);
  assert.deepEqual(owner.data.finance.creditPurchases[0].installments.map(part=>part.amount),[33.34,33.34,33.33]);
  assert.equal(owner.data.finance.bills.find(bill=>bill.sourceId==='card:nubank'&&bill.month===month).expectedAmount,33.34);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),675,'Credit purchase preserves cash until invoice payment');
@@ -123,6 +166,22 @@ try{
  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
  const desktop=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);await writeFile(path.join(root,'.browser-check','desktop-dashboard.png'),Buffer.from(desktop.data,'base64'));
  assert.ok(await evaluate("document.querySelector('.dashboard-grid').getBoundingClientRect().width>1000"));
+ const paidInvoiceBeforeRemoval=clone(owner.data.finance.bills.find(bill=>bill.sourceId==='card:nubank'&&bill.month===month));
+ assert.equal(paidInvoiceBeforeRemoval.status,'paid','invoice is settled before testing a credit purchase removal');
+ const purchaseToRemove=owner.data.finance.creditPurchases[0],futureMonth=purchaseToRemove.installments.at(-1).date.slice(0,7);
+ const futureInvoiceBeforeRemoval=owner.data.finance.bills.find(bill=>bill.sourceId==='card:nubank'&&bill.month===futureMonth);
+ assert.ok(futureInvoiceBeforeRemoval&&futureInvoiceBeforeRemoval.expectedAmount>0,'future invoice contains the installment before removal');
+ await evaluate("(()=>{const env=[...document.querySelectorAll('.dashboard-environment')].find(item=>item.textContent.includes('Jefferson'));if(!env)throw Error('Missing Jefferson dashboard environment');[...env.querySelectorAll('button')].find(item=>item.textContent.trim()==='Gerenciar despesas').click()})()");
+ await waitFor("document.querySelector('#modalTitle').textContent.includes('Gerenciar despesas')");
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Notebook parcelado')"),'admin expense list shows credit purchases');
+ const ownerRevisionBeforeRemoval=owner.revision;
+ await click('#modalContent .expense-admin-row button');await input('#adminExpenseReason','Compra registrada em duplicidade');await submit();
+ await waitSaved(()=>owner.revision>ownerRevisionBeforeRemoval);
+ assert.equal(owner.data.finance.creditPurchases.some(purchase=>purchase.id===purchaseToRemove.id),false,'admin removal deletes the credit purchase');
+ assert.equal(owner.data.finance.expenseRemovals.at(-1).reason,'Compra registrada em duplicidade','removal records its reason');
+ assert.deepEqual(owner.data.finance.bills.find(bill=>bill.id===paidInvoiceBeforeRemoval.id),paidInvoiceBeforeRemoval,'paid invoice remains unchanged after removing the purchase');
+ assert.equal(owner.data.finance.bills.find(bill=>bill.sourceId==='card:nubank'&&bill.month===futureMonth)?.expectedAmount,0,'future invoices recalculate without the removed purchase');
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Compra registrada em duplicidade')"),'dashboard lists the removal audit entry');
  await input('#dash_podo_balance','500');await input('#dash_podo_income','4000');await input('#dash_podo_reserve','200');await evaluate("document.querySelector('#dash_podo_balance').closest('form').querySelector('button[type=submit]').click()");
  await waitSaved(()=>clinic.data.finance?.openingBalance?.amount===500);
  await waitFor("!document.querySelector('#dash_podo_balance').disabled");
@@ -133,20 +192,38 @@ try{
  await signOut();
  const originalRecords=clone(accounts.slice(0,2));
  await login('filla');await assertPrivate();
- assert.equal(await evaluate("document.querySelector('#profileIcon').textContent"),'FI');
+ assert.equal(await evaluate("document.querySelector('#profileIcon').tagName"),'BUTTON');
  assert.equal(await evaluate("document.querySelectorAll('#dashboard,#dashboardAccess').length"),0,'Friend receives no dashboard DOM');
  assert.equal(friend.data.transactions.length,0);assert.equal(friend.data.finance?.creditPurchases?.length||0,0);
- for(const action of ['adminOverview','adminSaveSettings'])assert.equal(await evaluate(`fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:${JSON.stringify(action)},targetProfile:'personal',revision:0})}).then(response=>response.status)`),403);
+ for(const action of ['adminOverview','adminSaveSettings','adminRemoveExpense'])assert.equal(await evaluate(`fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:${JSON.stringify(action)},targetProfile:'personal',revision:0,kind:'transaction',id:'none',reason:'test'})}).then(response=>response.status)`),403);
  const beforeForgery=clone(friend);
  for(const key of ['clients','appointments','services','settings']){
   const forged={action:'save',revision:friend.revision,data:{transactions:[],[key]:key==='settings'?{}:[]}};
   assert.equal(await evaluate(`fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:${JSON.stringify(JSON.stringify(forged))}}).then(response=>response.status)`),403);
  }
  assert.deepEqual(friend,beforeForgery,'Forged clinical writes do not change data or revision');
- await button('Conferir saldo');await input('#financeBalanceAmount','200');await submit();await waitSaved(()=>friend.data.finance?.openingBalance?.amount===200);
+ await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
+ assert.ok(await evaluate("!document.querySelector('#modalContent').textContent.includes('Revisar agenda compartilhada')"),'Filla task list is isolated from the owners');
+ await input('#taskTitle','Tarefa privada da Filla');await submit();await waitSaved(()=>isolatedTasks.get('filla')?.tasks.length===1);
+ assert.equal(ownersTasks.length,1,'Filla task does not enter the shared owners list');await escape();
+ await nav('configuracoes');await button('Cadastrar saldo');await input('#financeBalanceAmount','200');await submit();await waitSaved(()=>friend.data.finance?.openingBalance?.amount===200);
  assert.deepEqual(accounts.slice(0,2),originalRecords,'Tester changes preserve original accounts and revisions');
  assert.ok(acceptedSaves.filter(item=>item.username==='filla').every(item=>Object.keys(item.data).every(key=>['transactions','finance'].includes(key))),'Accepted personal saves contain financial keys only');
  await signOut();await login('raquel');
+ assert.equal(await evaluate("document.querySelector('#profileIcon').tagName"),'BUTTON');
+ await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Revisar agenda compartilhada')&&document.querySelector('#modalContent').textContent.includes('05/11/2026')"),'Raquel sees the shared task name and due date');
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Criada por jefferson')"),'shared task keeps its creator name');
+ const sharedTaskId=ownersTasks[0].id;
+ await click('#modalContent input[type="checkbox"][aria-label="Concluir Revisar agenda compartilhada"]');
+ await waitSaved(()=>ownersTasks[0].completedBy==='raquel');
+ const taskCompletionRevision=ownersTasksRevision;
+ assert.equal(ownersTasks[0].completedBy,'raquel','Raquel is recorded as the completer');
+ assert.ok(await evaluate("(()=>{const box=document.querySelector('#modalContent input[type=checkbox]');return box.checked&&box.disabled})()"),'completed tasks cannot be unchecked');
+ await click('#modalContent input[type="checkbox"][aria-label="Concluir Revisar agenda compartilhada"]');
+ assert.equal(ownersTasksRevision,taskCompletionRevision,'disabled completed task cannot be toggled again');
+ await escape();
+ assert.equal(await evaluate("fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'adminRemoveExpense',targetProfile:'podo',revision:0,kind:'credit',id:'none',reason:'test'})}).then(response=>response.status)"),403,'Raquel cannot call admin expense removal');
  assert.ok(assets.some(item=>item.username==='raquel'&&item.url.includes('/views/clinic.html')));
  assert.ok(assets.some(item=>item.username==='raquel'&&item.url.includes('/clinic-features.js')));
  assert.equal(await evaluate("document.querySelectorAll('#agenda,#clientes,#ajustes,#servicesList').length"),4,'Clinical account mounts its own views');

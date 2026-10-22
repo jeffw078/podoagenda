@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {createFinanceInsights} from '../finance-insights.js';
+import {validateCardLimits} from '../finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 
@@ -15,6 +17,7 @@ let items=[{name:'Compra de teste',qty:1,unit:100.01}],saved=0,sequence=0;
 const db={services:[],clients:[],appointments:[],transactions:[],settings:{}};
 const context=vm.createContext({$:element,db,structuredClone,crypto:globalThis.crypto,expenseItems:()=>items,uid:()=>String(++sequence),persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),money:value=>Number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),esc:value=>String(value)});
 vm.runInContext(await readFile(new URL('../finance-core.js',import.meta.url),'utf8'),context);
+context.FinanceInsights=createFinanceInsights(context.FinanceCore);context.financeCreditWarningsHtml=warnings=>JSON.stringify(warnings);
 vm.runInContext(source,context);
 const plan=(cents,method,count,month,date)=>context.planExpensePayments(cents,method,count,month,date);
 const credit=plan(10001,'credit',3,'2026-12','2026-10-20');
@@ -48,7 +51,7 @@ assert.equal(context.totals('2026-10-01','2026-10-31').expense,0);
 assert.equal(context.totals('2026-12-01','2026-12-31').expense,33.34);
 assert.equal(context.totals('2027-01-01','2027-01-31').expense,0,'An unpaid invoice must not be charged to available cash');
 const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
-const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{FinanceCore:context.FinanceCore,validAnamnesis,objectValue});
+const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{FinanceCore:context.FinanceCore,validAnamnesis,objectValue,validateCardLimits});
 assert.equal(validate(db),true);
 
 element('ePaymentMethod').value='debit';context.updateExpensePayment();

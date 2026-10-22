@@ -18,6 +18,7 @@ try{
  assert.equal(login.body.username,username);assert.equal(login.body.profile,'personal');assert.equal(login.body.mustChangePassword,false);
  cookie=login.response.headers.get('set-cookie')?.split(';')[0];assert.ok(cookie,'Login must issue a session');
  const me=await request('me');assert.equal(me.response.status,200);assert.equal(me.body.username,username);
+ const tasks=await request('tasksList');assert.equal(tasks.response.status,200);assert.ok(Array.isArray(tasks.body.tasks));assert.ok(Number.isInteger(tasks.body.revision),'Tasks use an independent revision');
  for(const view of [login.body,me.body]){
   assert.deepEqual(view.capabilities,{finance:true,clinic:false,admin:false});
   assert.ok(Array.isArray(view.data.transactions));
@@ -29,7 +30,7 @@ try{
  const unchanged=await request('me');assert.equal(unchanged.body.revision,me.body.revision);assert.deepEqual(unchanged.body.data,me.body.data,'Rejected requests do not alter account data');
  assert.equal((await request('adminOverview')).response.status,403,'Additional personal account cannot read the dashboard');
  assert.equal((await request('adminSaveSettings',{targetProfile:'personal',revision:0,settings:{}})).response.status,403,'Additional personal account cannot change owner settings');
- console.log(JSON.stringify({username,profile:'personal',loginVerified:true,sessionVerified:true,financialPayloadOnly:true,clinicalWritesDenied:true,dataUnchanged:true,dashboardDenied:true,ownerSettingsDenied:true}));
+ console.log(JSON.stringify({username,profile:'personal',loginVerified:true,sessionVerified:true,financialPayloadOnly:true,clinicalWritesDenied:true,dataUnchanged:true,tasksVerified:true,dashboardDenied:true,ownerSettingsDenied:true}));
 }finally{
  if(cookie){await request('logout');assert.equal((await request('me')).response.status,401,'Test session must be revoked');console.log('Sessão de verificação encerrada.');}
 }

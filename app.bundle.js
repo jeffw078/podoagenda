@@ -1,5 +1,8 @@
 import FinanceCore from './finance-browser.js';
 import {installActionEvents} from './ui-actions.js';
+import {createFinanceInsights} from './finance-insights.js';
+import {createTasksFeature} from './tasks-ui.js';
+const FinanceInsights=createFinanceInsights(FinanceCore);
 /* Financial views. Classic script: uses FinanceCore and the application's helpers. */
 'use strict';
 let financeSettingsSelectedMonth = '';
@@ -78,43 +81,30 @@ function renderPersonalFinance(targetId = 'personalFinanceContent', monthId = 'p
     ${financeKpi('Gastos do mês', summary.spending, 'Compras e gastos de consumo')}
     ${financeKpi('Reservado no mês', summary.reserved, `Meta: ${esc(money(summary.reserveExpected))}`)}
   </div>
-  <div class="actions finance-quick-actions"><button type="button" class="btn" data-onclick="openIncome()">+ Entrada</button><button type="button" class="btn secondary" data-onclick="openFinanceExpenses('bills')">Contas e gastos</button><button type="button" class="btn outline" data-onclick="financeOpenBalance()">Conferir saldo</button></div>
-  <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3><button class="btn outline small" data-onclick="financeOpenPlan(${financeArgument(month)})">Planejar mês</button></div>
+  ${financeIndicatorsHtml(month)}
+  <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3></div>
     <dl class="finance-summary"><div><dt>Renda mensal prevista</dt><dd>${plan ? esc(money(plan.expectedIncome)) : 'Não informada'}</dd></div><div><dt>Entradas lançadas</dt><dd>${esc(money(summary.income))}</dd></div><div><dt>Contas pagas</dt><dd>${esc(money(summary.billsPaid))}</dd></div><div><dt>Disponível após as contas previstas</dt><dd>${esc(money(summary.freeAfterBills))}</dd></div></dl>${unknown ? '<p class="notice warn">Existem contas sem valor previsto. O disponível após as contas ainda pode mudar.</p>' : ''}
     ${!db.finance.openingBalance ? '<button type="button" class="btn secondary full" data-onclick="financeOpenBalance()">Cadastrar meu saldo atual</button>' : ''}
   </section><section class="card"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" data-onclick="openFinanceExpenses('bills')">Ver / adicionar</button></div>${financeBillRows(bills, true)}</section></div>${financeCreditPurchasesHtml(month)}
   <section class="card"><h3>Movimentações do mês</h3>${transactions.length ? transactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || t.category || 'Lançamento')}</strong><small>${financeDateLabel(t.date)} · ${esc(t.financeKind === 'reserve' ? 'Reserva' : t.financeKind === 'bill' ? 'Conta paga' : t.category || 'Movimentação')}</small></div><strong class="${t.type === 'income' ? 'positive' : 'negative'}">${t.type === 'income' ? '+' : '−'} ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Sem movimentações neste mês.</p>'}</section>`;
 }
 
-function openFinanceExpenses(tab = 'bills', preserveMonth = false) {
+function openFinanceExpenses(tab = 'spending', preserveMonth = false) {
   const spending = tab === 'spending' || tab === 'gastos';
   const month = (preserveMonth && financeBillsSelectedMonth) || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth');
   financeBillsSelectedMonth = month;
-  const tabs = `<div class="tabs finance-tabs" aria-label="Tipo de despesa"><button type="button" class="${spending ? '' : 'selected'}" aria-pressed="${!spending}" data-onclick="openFinanceExpenses('bills',true)">Contas</button><button type="button" class="${spending ? 'selected' : ''}" aria-pressed="${spending}" data-onclick="openFinanceExpenses('spending',true)">Gastos</button></div>`;
+  const tabs = `<div class="tabs finance-tabs" aria-label="Tipo de despesa"><button type="button" class="${spending ? 'selected' : ''}" aria-pressed="${spending}" data-onclick="openFinanceExpenses('spending',true)">Gastos diários</button><button type="button" class="${spending ? '' : 'selected'}" aria-pressed="${!spending}" data-onclick="openFinanceExpenses('bills',true)">Contas do mês</button></div>`;
   if (spending) {
-    modal('Contas e gastos', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, escolha o cartão e o mês de cada fatura.</p>' + renderSpendingForm()+financeCreditPurchasesHtml(month));
+    modal('Gastos diários e contas do mês', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, escolha o cartão e o mês de cada fatura.</p>' + renderSpendingForm()+financeCreditPurchasesHtml(month));
     showSpendingFields();
     return;
   }
   const bills = financeSync(month);
-  modal('Contas e gastos', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required data-onchange="financeChangeBillsMonth()"')}<button type="button" class="btn small" data-onclick="financeOpenBill()">+ Conta avulsa</button></div><p class="footer-note">Cadastre vencimentos aqui. Ao pagar, informe o valor real; a previsão fica preservada.</p><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" data-onclick="financeOpenRecurring()">+ Conta recorrente</button>`);
+  modal('Gastos diários e contas do mês', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required data-onchange="financeChangeBillsMonth()"')}</div><p class="footer-note">Ao pagar, informe o valor real; a previsão fica preservada. Configure novas contas em recorrências.</p><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" data-onclick="financeOpenRecurring()">+ Conta recorrente</button>`);
 }
 function financeChangeBillsMonth() { financeBillsSelectedMonth = financeMonth('financeBillsMonth'); openFinanceExpenses('bills', true); }
 function financeCategories(selected = '') {
   return [...new Set([...expenseCategories, 'Reserva', selected].filter(Boolean))].map(category => `<option value="${esc(category)}" ${category === selected ? 'selected' : ''}>${esc(category)}</option>`).join('');
-}
-function financeOpenBill() {
-  const month = financeBillsSelectedMonth || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth');
-  modal('Nova conta', `<form class="fields" data-onsubmit="event.preventDefault();financeSaveBill()">${financeInput('Descrição', 'financeBillDescription', 'text', '', 'required maxlength="180"')}
-    <div class="fields two">${financeInput('Vencimento', 'financeBillDue', 'date', `${month}-01`, 'required')}${financeInput('Valor previsto (R$), se conhecido', 'financeBillAmount', 'number', '', 'min="0" step="0.01" placeholder="Sem previsão"')}</div>
-    <label class="field">Categoria<select id="financeBillCategory">${financeCategories('Outros')}</select></label><p class="footer-note">Deixe o valor vazio se ainda não souber quanto virá. Informe o valor efetivo na hora de pagar.</p><button type="submit" class="btn full">Cadastrar conta</button></form>`);
-}
-function financeSaveBill() {
-  financeMutate(() => {
-    const dueDate = $('financeBillDue').value;
-    FinanceCore.createBill(db, { description: $('financeBillDescription').value.trim(), category: $('financeBillCategory').value, dueDate, month: dueDate.slice(0, 7), expectedAmount: financeAmount('financeBillAmount', true) });
-    financeBillsSelectedMonth = dueDate.slice(0, 7);
-  }, () => openFinanceExpenses('bills', true));
 }
 function financeOpenPayment(id) {
   const bill = FinanceCore.ensure(db).bills.find(item => item.id === id);
@@ -160,8 +150,8 @@ function renderReservePage() {
   const month = financeMonth('reserveMonth');
   const bills = financeSync(month).filter(item => item.source === 'reserve');
   const summary = FinanceCore.monthlySummary(db, month, dateToday);
-  const percent = summary.reserveExpected > 0 ? Math.min(100, Math.max(0, summary.reserved / summary.reserveExpected * 100)) : 0;
-  target.innerHTML = `<div class="finance-kpis finance-kpis-three">${financeKpi('Meta do mês', summary.reserveExpected)}${financeKpi('Já reservado', summary.reserved)}${financeKpi('Falta reservar', Math.max(0, summary.reserveExpected - summary.reserved))}</div><section class="card"><h3>Sua reserva em ${esc(financeMonthLabel(month))}</h3><div class="finance-reserve-progress" role="progressbar" aria-label="Progresso da reserva mensal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}"><span style="width:${percent}%"></span></div><p class="footer-note">${Math.round(percent)}% da meta reservado. A reserva paga reduz o disponível e fica separada dos gastos de consumo.</p>${financeBillRows(bills)}</section><section class="card"><h3>Planejar reserva mensal</h3>${financePlanForm(month, 'reserve')}</section>`;
+  const reserveTransactions = (db.transactions || []).filter(t => t.financeKind === 'reserve' && t.date?.slice(0, 7) === month).sort((a, b) => b.date.localeCompare(a.date));
+  target.innerHTML = `<div class="finance-kpis finance-kpis-three">${financeKpi('Reservado no mês', summary.reserved, 'Valor efetivamente lançado e pago.')}</div><section class="card"><h3>Histórico da reserva em ${esc(financeMonthLabel(month))}</h3>${reserveTransactions.length ? reserveTransactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || 'Reserva')}</strong><small>${financeDateLabel(t.date)} · Reserva</small></div><strong class="negative">− ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Nenhuma reserva lançada neste mês.</p>'}${bills.length ? `<h3>Contas de reserva do mês</h3>${financeBillRows(bills)}</section>` : '</section>'}`;
 }
 
 function financeOpenBalance() {
@@ -207,8 +197,39 @@ function renderFinanceSettings() {
   financeSync(month);
   const finance = FinanceCore.ensure(db);
   target.innerHTML = `<section class="card"><div class="finance-heading"><h3>Planejamento financeiro</h3>${financeInput('Mês', 'financeSettingsMonth', 'month', month, 'required data-onchange="financeSettingsMonthChanged()"')}</div>${financePlanForm(month, 'settings')}</section>
-    <section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" data-onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" data-onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}</section>
+    ${financeCardLimitsForm(month)}<section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" data-onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" data-onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}${financeReserveRecurringHtml(month)}</section>
     <section class="card"><div class="finance-heading"><h3>Saldo atual e histórico</h3><button type="button" class="btn outline small" data-onclick="financeOpenBalance()">${finance.openingBalance ? 'Conferir / corrigir' : 'Cadastrar saldo'}</button></div><div class="finance-balance-value">${esc(money(FinanceCore.currentBalance(db, dateToday)))}</div><p class="footer-note">Saldo cadastrado atualizado pelos lançamentos até ${financeDateLabel(dateToday)}.</p>${finance.openingBalance ? `<div class="finance-audit"><strong>Ponto inicial · ${financeDateLabel(finance.openingBalance.date)}</strong><span>${esc(money(finance.openingBalance.amount))}</span></div>` : '<p class="notice">O saldo inicial ainda não foi cadastrado.</p>'}${[...finance.adjustments].reverse().map(adjustment => `<article class="finance-audit"><div><strong>${financeDateLabel(adjustment.date)} · ${esc(adjustment.reason)}</strong><small>${esc(money(adjustment.before))} → ${esc(money(adjustment.after))}</small></div><span>${adjustment.delta >= 0 ? '+' : '−'} ${esc(money(Math.abs(adjustment.delta)))}</span></article>`).join('')}<p class="footer-note">O ponto inicial e as correções anteriores são preservados. Corrigir saldo exige um motivo e não cria receita ou despesa.</p></section>`;
+}
+
+
+function financeCreditWarningsHtml(warnings){
+ return warnings.map(warning=>'<p class="notice warn" role="status">'+esc(financeCardName(warning.cardId))+' · '+esc(financeMonthLabel(warning.month))+': limite de '+esc(money(warning.limit))+' excedido em '+esc(money(warning.excess))+'. Total previsto: '+esc(money(warning.projected))+'.</p>').join('');
+}
+function financeIndicatorsHtml(month){
+ const insight=FinanceInsights.overview(db,month,dateToday),forecast=insight.forecast,reserve=insight.reserve;
+ const maximum=Math.max(forecast.income,forecast.outflows,1),categories=[...insight.categories].sort((a,b)=>b.amount-a.amount),categoryMax=Math.max(...categories.map(item=>item.amount),1);
+ const bar=(label,value,color,max)=>'<div class="insight-bar-row"><div class="flex"><span>'+esc(label)+'</span><strong>'+esc(money(value))+'</strong></div><div class="insight-bar-track"><div class="insight-bar '+color+'" style="width:'+Math.max(0,Math.min(100,value/max*100))+'%"></div></div></div>';
+ return '<div class="finance-insights"><section class="card"><h3>Previsão de entradas e saídas</h3><p class="footer-note">'+esc(financeMonthLabel(month))+'</p><div role="img" aria-label="Entradas previstas '+esc(money(forecast.income))+'; saídas previstas '+esc(money(forecast.outflows))+'">'+bar('Entradas previstas',forecast.income,'income',maximum)+bar('Saídas previstas',forecast.outflows,'outflow',maximum)+'</div><div class="insight-result '+(forecast.gap<0?'negative':'positive')+'">'+(forecast.shortfall>0?'Vai faltar '+esc(money(forecast.shortfall)):'Sobra prevista de '+esc(money(forecast.gap)))+'</div><p class="footer-note">A previsão compara a renda planejada ou já recebida com gastos, contas e reserva do mês. O saldo inicial fica fora desta comparação.</p>'+(forecast.unknown?'<p class="notice warn">'+forecast.unknown+' conta(s) ainda sem valor previsto.</p>':'')+'</section><section class="card"><h3>Gastos por categoria</h3>'+(categories.length?categories.map(item=>bar(item.category,item.amount,'category',categoryMax)).join(''):'<p class="empty">Nenhum gasto registrado neste mês.</p>')+'<p class="footer-note">Inclui parcelas do crédito no mês da fatura, sem contar novamente o pagamento do cartão. A reserva fica separada.</p></section><section class="card"><h3>Meta acumulada da reserva</h3><p class="footer-note">Até '+esc(financeMonthLabel(reserve.throughMonth))+'</p><div class="reserve-progress" role="progressbar" aria-label="Meta acumulada da reserva" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+(reserve.percentage||0)+'"><div style="width:'+(reserve.percentage||0)+'%"></div></div><dl class="finance-summary"><div><dt>Valor juntado</dt><dd>'+esc(money(reserve.saved))+'</dd></div><div><dt>Metas somadas</dt><dd>'+esc(money(reserve.target))+'</dd></div><div><dt>Juntado − meta</dt><dd class="'+(reserve.difference<0?'negative':'positive')+'">'+esc(money(reserve.difference))+'</dd></div></dl><p class="footer-note">As metas são definidas nas configurações e lançadas como contas mensais da reserva.</p></section></div>'+financeCreditWarningsHtml(FinanceInsights.cardWarnings(db).filter(warning=>warning.month===month));
+}
+function financeCardLimitsForm(month){
+ const limits=FinanceCore.ensure(db).cardLimits||[];
+ return '<section class="card"><h3>Limite de uso do cartão no mês</h3><p class="footer-note">'+esc(financeMonthLabel(month))+'. O limite avisa quando as parcelas e os valores previstos ultrapassarem o orçamento. Deixe vazio para não definir limite.</p><form class="fields" data-onsubmit="event.preventDefault();financeSaveCardLimits('+financeArgument(month)+')"><div class="fields two">'+['nubank','mercado_pago'].map(cardId=>financeInput(financeCardName(cardId)+' (R$)','cardLimit_'+cardId,'number',limits.find(limit=>limit.month===month&&limit.cardId===cardId)?.amount??'','min="0" step="0.01"')).join('')+'</div><button type="submit" class="btn full">Salvar limites do mês</button></form></section>';
+}
+function financeSaveCardLimits(month){
+ financeMutate(()=>{
+  const staged=structuredClone(db);
+  for(const cardId of ['nubank','mercado_pago']){
+   const raw=$('cardLimit_'+cardId).value.trim();
+   if(!raw){if(staged.finance?.cardLimits)staged.finance.cardLimits=staged.finance.cardLimits.filter(limit=>limit.month!==month||limit.cardId!==cardId);continue;}
+   FinanceInsights.setCardLimit(staged,month,cardId,Number(raw.replace(',','.')));
+  }
+  db.finance=staged.finance;
+ });
+}
+function financeReserveRecurringHtml(month){
+ const bill=FinanceCore.ensure(db).bills.find(item=>item.month===month&&item.source==='reserve');
+ if(!bill)return '';
+ return '<article class="finance-recurring"><div><strong>Reserva mensal</strong><small>Conta fixa do planejamento · '+esc(financeDateLabel(bill.dueDate))+'</small></div><div><strong>'+esc(money(bill.expectedAmount||0))+'</strong>'+financeStatus(bill)+'</div></article>';
 }
 
 
@@ -233,6 +254,24 @@ async function loadManagementDashboard(){
  }catch(error){if(epoch===managementEpoch)$('dashboardContent').innerHTML='<div class="notice warn">'+esc(error.message)+'</div>'}
 }
 function dashboardAccount(target){const account=managementAccounts.find(item=>item.profile===target);if(!account)throw Error('Ambiente indisponível. Atualize o painel.');return account}
+function dashboardOpenExpenses(target){
+ if(!dashboardAllowed()||managementBusy)return;
+ const account=dashboardAccount(target),finance=FinanceCore.ensure(account.data);
+ const row=(kind,id,title,detail,amount)=>'<article class="expense-admin-row"><div><strong>'+esc(title)+'</strong><small>'+esc(detail)+' · '+money(amount)+'</small></div><button class="btn danger small" data-onclick="dashboardRequestExpenseRemoval('+esc(JSON.stringify(target))+','+esc(JSON.stringify(kind))+','+esc(JSON.stringify(id))+')">Excluir</button></article>';
+ const purchases=finance.creditPurchases.map(purchase=>row('credit',purchase.id,purchase.description,({nubank:'Nubank',mercado_pago:'Mercado Pago'})[purchase.cardId]+' · '+purchase.installments.length+' parcela(s)',purchase.amount));
+ const expenses=account.data.transactions.filter(item=>item.type==='expense').map(item=>row('transaction',item.id,item.description,item.date.split('-').reverse().join('/')+(item.billId?' · Pagamento de conta':''),item.amount));
+ const history=(finance.expenseRemovals||[]).slice().reverse().map(item=>'<div class="item"><div><b>'+esc(item.reason)+'</b><small>'+esc(item.actor)+' · '+esc(new Date(item.removedAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}))+'</small><small>'+esc(item.record?.purchase?.description||item.record?.transaction?.description||'Despesa removida')+'</small></div></div>').join('');
+ modal('Gerenciar despesas · '+(target==='podo'?'Raquel':'Jefferson'),'<p class="notice">Ao excluir uma compra no crédito, as parcelas são retiradas das faturas pendentes. Faturas já pagas permanecem no histórico. Ao excluir o pagamento de uma conta, ela volta a ficar pendente.</p><h3>Compras no cartão</h3>'+ (purchases.join('')||'<p class="empty">Nenhuma compra no crédito.</p>')+'<h3>Saídas e pagamentos</h3>'+(expenses.join('')||'<p class="empty">Nenhuma despesa lançada.</p>')+'<div class="divider"></div><h3>Histórico de exclusões</h3>'+(history||'<p class="empty">Nenhuma exclusão registrada.</p>'));
+}
+function dashboardRequestExpenseRemoval(target,kind,id){
+ if(!dashboardAllowed()||managementBusy)return;
+ modal('Excluir despesa',formHtml('<p class="notice warn">A exclusão ficará registrada com seu nome e o motivo informado. Confira o lançamento antes de confirmar.</p><label class="field">Motivo da exclusão<textarea id="adminExpenseReason" required maxlength="500" rows="3"></textarea></label>','dashboardConfirmExpenseRemoval('+JSON.stringify(target)+','+JSON.stringify(kind)+','+JSON.stringify(id)+')','Confirmar exclusão'));
+}
+async function dashboardConfirmExpenseRemoval(target,kind,id){
+ if(!dashboardAllowed()||managementBusy)return;
+ const reason=$('adminExpenseReason').value.trim();if(!reason)return alert('Informe o motivo da exclusão.');
+ try{await dashboardSave(target,{kind,id,reason},'adminRemoveExpense');if(dashboardAllowed())dashboardOpenExpenses(target);}catch(error){alert(error.message);}
+}
 function dashboardInput(label,id,type,value,extra=''){return '<label class="field">'+label+'<input id="'+id+'" type="'+type+'" value="'+esc(value??'')+'" '+extra+'></label>'}
 function dashboardEnvironment(account,month){
  const data=account.data,schedule=account.configuration?.clinicSchedule,catalog=account.configuration?.serviceCatalog||[];FinanceCore.ensureCreditCards(data,month);FinanceCore.syncMonth(data,month);
@@ -249,9 +288,10 @@ function dashboardEnvironment(account,month){
  '<div class="divider"></div><h3>Planejamento de '+esc(month.split('-').reverse().join('/'))+'</h3>'+dashboardInput('Renda prevista do mês (R$)',p+'_income','number',plan.expectedIncome,'min="0" step="0.01" required')+
  '<div class="fields two"><label class="field">Meta da reserva<select id="'+p+'_mode"><option value="amount" '+(plan.reserveMode==='amount'?'selected':'')+'>Valor fixo em reais</option><option value="percentage" '+(plan.reserveMode==='percentage'?'selected':'')+'>Percentual da renda prevista</option></select></label>'+dashboardInput('Valor ou percentual',p+'_reserve','number',plan.reserveValue,'min="0" step="0.01" required')+'</div>'+dashboardInput('Dia de vencimento da reserva',p+'_day','number',plan.reserveDueDay,'min="1" max="31" step="1" required')+
  (studio?'<div class="divider"></div><h3>Jornada da agenda</h3><div class="fields two">'+dashboardInput('Início',p+'_start','time',schedule.start,'required')+dashboardInput('Fim',p+'_end','time',schedule.end,'required')+'</div><div class="fields two">'+dashboardInput('Início do almoço',p+'_lunch','time',schedule.lunch,'required')+dashboardInput('Almoço (minutos)',p+'_lunchDuration','number',schedule.lunchDuration,'min="60" max="240" step="1" required')+'</div>':'')+
- '<button class="btn full" type="submit">Salvar configurações</button></form>'+
+ '<h3>Limites de uso do cartão no mês</h3><div class="fields two">'+['nubank','mercado_pago'].map(cardId=>dashboardInput(({nubank:'Nubank',mercado_pago:'Mercado Pago'})[cardId]+' (R$)',p+'_limit_'+cardId,'number',finance.cardLimits?.find(limit=>limit.month===month&&limit.cardId===cardId)?.amount??'','min="0" step="0.01"')).join('')+'</div><button class="btn full" type="submit">Salvar configurações</button></form>'+
  '<div class="card"><div class="flex"><h3>Contas recorrentes</h3><button class="btn secondary small" data-onclick="dashboardOpenRecurring(\''+account.profile+'\')">+ Recorrência</button></div>'+(finance.recurringBills.map((rule,index)=>'<div class="item"><div><b>'+esc(rule.description)+'</b><small>'+(rule.fixed?'Fixa':'Variável')+' · '+(rule.cardId?'Fatura automática':rule.expectedAmount===null?'Valor a definir':money(rule.expectedAmount))+' · dia '+rule.dueDay+' · '+(rule.active?'Ativa':'Pausada')+'</small></div><button class="btn outline small" data-onclick="dashboardOpenRecurring(\''+account.profile+'\','+index+')">Editar</button></div>').join('')||'<p class="muted">Nenhuma recorrência cadastrada.</p>')+'</div>'+
  (studio?'<div class="card"><div class="flex"><h3>Serviços</h3><button class="btn secondary small" data-onclick="dashboardOpenService()">+ Serviço</button></div>'+catalog.map((service,index)=>service.archived?'':'<div class="item"><div><b>'+esc(service.name)+'</b><small>'+service.duration+' min · '+money(service.price)+'</small></div><button class="btn outline small" data-onclick="dashboardOpenService('+index+')">Editar</button><button class="btn danger small" data-onclick="dashboardDeleteService('+index+')">Excluir</button></div>').join('')+'</div>':'')+
+ '<div class="card"><h3>Despesas lançadas</h3><p class="footer-note">Exclusão restrita ao administrador, com motivo e histórico.</p><button class="btn outline" data-onclick="dashboardOpenExpenses(\''+account.profile+'\')">Gerenciar despesas</button></div>'+
  '<div class="card"><h3>Histórico de correções de saldo</h3>'+(finance.adjustments.slice().reverse().slice(0,10).map(a=>'<div class="item"><div><b>'+esc(a.reason)+'</b><small>'+esc(a.date)+' · '+money(a.before)+' → '+money(a.after)+'</small></div><span>'+money(a.delta)+'</span></div>').join('')||'<p class="muted">Nenhuma correção registrada.</p>')+'</div></article>';
 }
 function renderManagementDashboard(){
@@ -261,7 +301,7 @@ function renderManagementDashboard(){
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return;
  $('dashboardContent').innerHTML='<div class="dashboard-grid">'+managementAccounts.map(account=>dashboardEnvironment(account,month)).join('')+'</div>';
 }
-async function dashboardSave(target,patch){
+async function dashboardSave(target,patch,action='adminSaveSettings'){
  if(!dashboardAllowed())throw Error('Acesso restrito a Jefferson.');
  if(managementBusy)throw Error('Aguarde o salvamento em andamento.');
  managementBusy=true;const epoch=managementEpoch;
@@ -269,7 +309,7 @@ async function dashboardSave(target,patch){
  controls.forEach(([control])=>control.disabled=true);document.body.classList.add('management-saving');
  try{
   await saveChain;if(saveFailed)throw Error('Há alterações não salvas neste aparelho. Recarregue a página.');
-  const account=dashboardAccount(target),result=await api('adminSaveSettings',{targetProfile:target,revision:account.revision,...patch});
+  const account=dashboardAccount(target),result=await api(action,{targetProfile:target,revision:account.revision,...patch});
   if(epoch!==managementEpoch||!dashboardAllowed())return;
   Object.assign(account,result);
   if(target===profile){
@@ -289,6 +329,11 @@ async function saveDashboardSettings(target){
    if(!data.finance?.openingBalance||Math.round(amount*100)!==Math.round(current*100))FinanceCore.setCurrentBalance(data,amount,dateToday,$(p+'_reason').value.trim());
   }
   FinanceCore.setMonthPlan(data,month,{expectedIncome:Number($(p+'_income').value),reserveMode:$(p+'_mode').value,reserveValue:Number($(p+'_reserve').value),reserveDueDay:Number($(p+'_day').value)});
+  for(const cardId of ['nubank','mercado_pago']){
+   const control=$(p+'_limit_'+cardId);if(!control)continue;
+   if(control.value.trim()===''){if(data.finance.cardLimits)data.finance.cardLimits=data.finance.cardLimits.filter(limit=>limit.month!==month||limit.cardId!==cardId);}
+   else FinanceInsights.setCardLimit(data,month,cardId,Number(control.value));
+  }
   const patch={finance:data.finance};
   if(target==='podo')patch.settings={start:$(p+'_start').value,end:$(p+'_end').value,lunch:$(p+'_lunch').value,lunchDuration:Number($(p+'_lunchDuration').value)};
   await dashboardSave(target,patch);
@@ -336,7 +381,7 @@ const KEY='studio_podologia_v1';const PERSONAL_KEY='studio_pessoal_v2';const AUT
 const initial=()=>({transactions:[]});
 let db=initial();let revision=0;let saveChain=Promise.resolve();let saveFailed=false;
 async function api(action,extra={}){const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({action,...extra})});let v=await r.json();if(!r.ok)throw Object.assign(Error(v.error||'Falha de conexão'),{status:r.status,code:v.code});return v}
-let sessionClosing=false;
+let sessionClosing=false,tasksFeature=null;
 const persist=()=>{if(!unlocked||sessionClosing)return;const epoch=sessionEpoch,snapshot=JSON.parse(JSON.stringify(db));saveChain=saveChain.then(async()=>{if(epoch!==sessionEpoch||saveFailed)return;try{const result=await api('save',{data:snapshot,revision});if(epoch===sessionEpoch)revision=result.revision}catch(e){if(epoch!==sessionEpoch)return;saveFailed=true;alert('ATENÇÃO: alteração não salva no Neon: '+e.message+' Recarregue a página para evitar perda ou sobrescrita de dados.')}});};
 const $=id=>document.getElementById(id);const dateToday=nowLocal();$('todayLine').textContent=readableDate(dateToday);
 function initializeViewDates(){for(const id of ['agendaDate','financeMonth','personalMonth','reserveMonth','dashboardMonth'])if($(id))$(id).value=id==='agendaDate'?dateToday:dateToday.slice(0,7);}
@@ -461,9 +506,9 @@ function openIncome(id){if(id&&!requireClinic())return;let a=db.appointments?.fi
 function saveIncome(apId){if(apId&&!requireClinic())return;if(db.appointments?.find(a=>a.id===apId)?.type==='personal')return alert('Compromisso pessoal não possui pagamento.');let amount=Number($('iAmount').value),description=$('iName').value.trim(),date=$('iDate').value,method=$('iMethod').value;if(!description||!(amount>0)||!date)return alert('Preencha os dados do recebimento.');if(apId&&paymentFor(apId))return alert('Pagamento já registrado.');db.transactions.push({id:uid(),type:'income',amount,description,date,method,...(apId?{appointmentId:apId}:{})});persist();closeModal();renderAll()}
 const categories=['Materiais e insumos','Aluguel','Água','Energia elétrica','Internet / telefone','Transporte','Marketing','Impostos e taxas','Manutenção','Outros'];
 
-function deleteTransaction(id){const transaction=db.transactions.find(t=>t.id===id);if(transaction?.billId)return alert('Este lançamento pertence a uma conta paga e faz parte do histórico financeiro.');const message=transaction?.paymentMethod==='credit'&&transaction.installmentCount>1?'Excluir somente a parcela '+transaction.installmentNumber+'/'+transaction.installmentCount+' desta compra? As outras parcelas serão mantidas.':'Excluir esta movimentação financeira?';if(!confirm(message))return;db.transactions=db.transactions.filter(t=>t.id!==id);persist();renderAll()}
+function deleteTransaction(id){const transaction=db.transactions.find(t=>t.id===id);if(transaction?.type==='expense')return alert('Despesas só podem ser excluídas pelo painel administrativo.');if(transaction?.billId)return alert('Este lançamento pertence a uma conta paga e faz parte do histórico financeiro.');if(!confirm('Excluir esta movimentação financeira?'))return;db.transactions=db.transactions.filter(t=>t.id!==id);persist();renderAll()}
 function totals(from,to){let rows=db.transactions.filter(t=>t.date>=from&&t.date<=to);let income=rows.filter(t=>t.type==='income').reduce((a,t)=>a+t.amount,0),expense=rows.filter(t=>t.type==='expense').reduce((a,t)=>a+t.amount,0);return{income,expense,balance:income-expense}}
-function renderHome(){const month=dateToday.slice(0,7),t=totals(month+'-01',dateToday);$('homeRevenue').textContent=money(t.income);$('homeExpenses').textContent=money(t.expense);$('homeBalance').textContent=money(FinanceCore.currentBalance(db,dateToday));$('homeMonth').textContent='Movimentações registradas até hoje • '+new Date(dateToday+'T12:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'});$('homeBalance').className='num '+(FinanceCore.currentBalance(db,dateToday)<0?'negative':'positive');let as=db.appointments.filter(a=>a.date===dateToday&&a.status!=='cancelado').sort((a,b)=>a.time.localeCompare(b.time));$('todayAppointments').innerHTML=as.length?as.map(a=>appointmentRow(a,true)).join(''):'<div class="empty">Nenhum atendimento agendado para hoje.</div>';renderOpportunity()}
+function renderHome(){if($('homeIndicators'))$('homeIndicators').innerHTML=financeIndicatorsHtml(dateToday.slice(0,7));const month=dateToday.slice(0,7),t=totals(month+'-01',dateToday);$('homeRevenue').textContent=money(t.income);$('homeExpenses').textContent=money(t.expense);$('homeBalance').textContent=money(FinanceCore.currentBalance(db,dateToday));$('homeMonth').textContent='Movimentações registradas até hoje • '+new Date(dateToday+'T12:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'});$('homeBalance').className='num '+(FinanceCore.currentBalance(db,dateToday)<0?'negative':'positive');let as=db.appointments.filter(a=>a.date===dateToday&&a.status!=='cancelado').sort((a,b)=>a.time.localeCompare(b.time));$('todayAppointments').innerHTML=as.length?as.map(a=>appointmentRow(a,true)).join(''):'<div class="empty">Nenhum atendimento agendado para hoje.</div>';renderOpportunity()}
 function appointmentRow(a,compact=false){const personal=a.type==='personal',name=personal?a.title:db.clients.find(c=>c.id===a.clientId)?.name||'Cliente removida',services=personal?'Compromisso pessoal':appointmentServiceNames(a),paid=!personal&&paymentFor(a.id);return `<div class="item"><div style="min-width:0"><b>${esc(a.time)} · ${esc(name)}</b><small>${esc(services)} · ${durationLabel(a.duration)}${personal?'':' · '+money(a.price)}</small><div style="margin-top:5px"><span class="pill ${a.status==='concluido'?'green':'gray'}">${a.status==='concluido'?'Concluído':a.status==='cancelado'?'Cancelado':'Agendado'}</span> ${personal?'<span class="pill personal-pill">Pessoal</span>':''}${paid?'<span class="pill green">Pago</span>':''} ${personal?'':clinicFeatures?.riskBadge(db.clients.find(c=>c.id===a.clientId))||''}</div></div>${compact?'':`<button class="btn secondary small" data-onclick="appointmentActions('${a.id}')">Detalhes</button>`}</div>`}
 function appointmentActions(id){
  const a=db.appointments.find(x=>x.id===id);if(!a)return;
@@ -494,9 +539,9 @@ function renderAll(){if(!unlocked)return;if(capabilities.clinic){renderHome();re
 
 const expenseCategories=['Materiais e insumos','Alimentação','Mercado','Moradia','Água','Energia elétrica','Internet / telefone','Transporte','Saúde','Educação','Lazer','Aluguel','Marketing','Impostos e taxas','Manutenção','Outros'];
 function guessCategory(text){let t=text.toLocaleLowerCase('pt-BR');for(let [re,c] of [[/farm[aá]cia|rem[eé]dio|medicamento|consulta|hospital/,'Saúde'],[/mercado|supermercado|hortifruti|a[cç]ougue|atacad/,'Mercado'],[/restaurante|lanchonete|pizza|lanche|caf[eé]/,'Alimentação'],[/posto|gasolina|combust[ií]vel|uber|estacionamento/,'Transporte'],[/esmalte|luva|alicate|instrumento|descart[aá]vel|podolog/,'Materiais e insumos'],[/energia|el[eé]trica|celesc/,'Energia elétrica'],[/internet|telefone|vivo|claro|tim/,'Internet / telefone']])if(re.test(t))return c;return 'Outros'}
-function openExpense(){openFinanceExpenses('bills')}
+function openExpense(){openFinanceExpenses('spending')}
 function expenseCardSelectHtml(){return '<label class="field">Cartão de crédito<select id="eCreditCard" required disabled data-onchange="updateExpensePaymentPreview()"><option value="">Selecione o cartão</option><option value="nubank">Nubank</option><option value="mercado_pago">Mercado Pago</option></select></label>'}
-function renderSpendingForm(){return `<div class="notice">Adicione quantos produtos quiser. O total é calculado automaticamente.</div><label class="field">Título da despesa<input id="eDescription" placeholder="Ex.: Compras na farmácia" required data-oninput="suggestExpenseCategory()"></label><div class="fields two"><label class="field">Data da compra<input id="eDate" type="date" value="${dateToday}" required data-onchange="syncExpensePurchaseDate()"></label><label class="field">Categoria<select id="eCategory">${expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}<option value="Personalizada">+ Nova categoria</option></select></label></div><label class="field">Categoria personalizada (opcional)<input id="eCustom" placeholder="Ex.: Presentes"></label><div class="divider"></div><div class="flex"><b>Itens da compra</b><button type="button" class="btn secondary small" data-onclick="addExpenseLine()">+ Item</button></div><div class="expense-line tiny muted"><span>Produto / descrição</span><span>Qtd.</span><span>Preço un.</span><span></span></div><div id="eLines"></div><div class="flex" style="margin:12px 0"><strong>TOTAL</strong><strong id="expenseTotal">R$ 0,00</strong></div><div class="divider"></div><label class="field">Como foi paga esta despesa?<select id="ePaymentMethod" required data-onchange="updateExpensePayment()"><option value="">Selecione a forma de pagamento</option><option value="debit">Débito</option><option value="cash">Dinheiro</option><option value="credit">Crédito</option></select></label><div id="eCreditFields" class="hidden">${expenseCardSelectHtml()}<div class="fields two"><label class="field">Número de parcelas<input id="eInstallments" type="number" value="1" min="1" max="120" step="1" disabled data-oninput="updateExpensePaymentPreview()"></label><label class="field">Mês da primeira parcela<input id="eFirstMonth" type="month" value="${dateToday.slice(0,7)}" min="${dateToday.slice(0,7)}" disabled data-oninput="updateExpensePaymentPreview()"></label></div><p class="footer-note">Se a fatura do cartão já fechou, selecione o mês da próxima fatura. As demais parcelas serão lançadas nos meses seguintes.</p></div><div id="expensePaymentPreview" class="notice" aria-live="polite" style="margin-top:12px">Selecione a forma de pagamento.</div><button type="button" class="btn full" data-onclick="saveExpense()">Salvar despesa</button>`}
+function renderSpendingForm(){return `<div class="notice">Adicione quantos produtos quiser. O total é calculado automaticamente.</div><label class="field">Título da despesa<input id="eDescription" placeholder="Ex.: Compras na farmácia" required data-oninput="suggestExpenseCategory()"></label><div class="fields two"><label class="field">Data da compra<input id="eDate" type="date" value="${dateToday}" required data-onchange="syncExpensePurchaseDate()"></label><label class="field">Categoria<select id="eCategory">${expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></label></div><div class="divider"></div><div class="flex"><b>Itens da compra</b><button type="button" class="btn secondary small" data-onclick="addExpenseLine()">+ Item</button></div><div class="expense-line tiny muted"><span>Produto / descrição</span><span>Qtd.</span><span>Preço un.</span><span></span></div><div id="eLines"></div><div class="flex" style="margin:12px 0"><strong>TOTAL</strong><strong id="expenseTotal">R$ 0,00</strong></div><div class="divider"></div><label class="field">Como foi paga esta despesa?<select id="ePaymentMethod" required data-onchange="updateExpensePayment()"><option value="">Selecione a forma de pagamento</option><option value="debit">Débito</option><option value="cash">Dinheiro</option><option value="credit">Crédito</option></select></label><div id="eCreditFields" class="hidden">${expenseCardSelectHtml()}<div class="fields two"><label class="field">Número de parcelas<input id="eInstallments" type="number" value="1" min="1" max="120" step="1" disabled data-oninput="updateExpensePaymentPreview()"></label><label class="field">Mês da primeira parcela<input id="eFirstMonth" type="month" value="${dateToday.slice(0,7)}" min="${dateToday.slice(0,7)}" disabled data-oninput="updateExpensePaymentPreview()"></label></div><p class="footer-note">Se a fatura do cartão já fechou, selecione o mês da próxima fatura. As demais parcelas serão lançadas nos meses seguintes.</p></div><div id="expensePaymentPreview" class="notice" aria-live="polite" style="margin-top:12px">Selecione a forma de pagamento.</div><button type="button" class="btn full" data-onclick="saveExpense()">Salvar despesa</button>`}
 function showSpendingFields(){addExpenseLine();updateExpensePayment()}
 function addExpenseLine(name='',qty=1,unit=''){const row=document.createElement('div');row.className='expense-line';row.innerHTML=`<input class="elname" aria-label="Nome do item" placeholder="Produto" value="${esc(name)}"><input class="elqty" aria-label="Quantidade" type="number" min="0.01" step="0.01" value="${qty}" data-oninput="updateExpenseTotal()"><input class="elunit" aria-label="Preço unitário" type="number" min="0" step="0.01" placeholder="0,00" value="${esc(unit)}" data-oninput="updateExpenseTotal()"><button class="btn danger small" type="button" aria-label="Remover item" data-onclick="removeExpenseLine()">×</button>`;$('eLines').appendChild(row);updateExpenseTotal()}
 function expenseItems(){return [...document.querySelectorAll('#eLines .expense-line')].map(x=>({name:x.querySelector('.elname').value.trim(),qty:Number(x.querySelector('.elqty').value),unit:Number(x.querySelector('.elunit').value)}))}
@@ -540,11 +585,11 @@ function updateExpensePaymentPreview(){
  try{
   const plan=planExpensePayments(cents,method,Number($('eInstallments').value),$('eFirstMonth').value,$('eDate').value);
   if(method!=='credit'){preview.textContent=expensePaymentLabel(method)+': '+money(cents/100)+' na data da compra.';return}
-  preview.innerHTML='<strong>Total da compra: '+money(cents/100)+'</strong><div class="installment-preview"><table><caption>Distribuição das parcelas</caption><thead><tr><th>Parcela</th><th>Mês da fatura</th><th>Valor</th></tr></thead><tbody>'+plan.map(part=>'<tr><td>'+part.installmentNumber+'/'+part.installmentCount+'</td><td>'+esc(expenseMonthLabel(part.date.slice(0,7)))+'</td><td>'+money(part.amount)+'</td></tr>').join('')+'</tbody></table></div><p class="footer-note">Cada parcela será somada à conta mensal do cartão escolhido. O saldo disponível será reduzido ao pagar a fatura em Contas.</p>';
+  preview.innerHTML='<strong>Total da compra: '+money(cents/100)+'</strong><div class="installment-preview"><table><caption>Distribuição das parcelas</caption><thead><tr><th>Parcela</th><th>Mês da fatura</th><th>Valor</th></tr></thead><tbody>'+plan.map(part=>'<tr><td>'+part.installmentNumber+'/'+part.installmentCount+'</td><td>'+esc(expenseMonthLabel(part.date.slice(0,7)))+'</td><td>'+money(part.amount)+'</td></tr>').join('')+'</tbody></table></div><p class="footer-note">Cada parcela será somada à conta mensal do cartão escolhido. O saldo disponível será reduzido ao pagar a fatura em Contas do mês.</p>'+(['nubank','mercado_pago'].includes($('eCreditCard').value)?financeCreditWarningsHtml(FinanceInsights.cardWarnings(db,{cardId:$('eCreditCard').value,installments:plan})): '');
  }catch(error){preview.textContent=error.message}
 }
 function saveExpense(){
- const items=expenseItems(),description=$('eDescription').value.trim(),purchaseDate=$('eDate').value,category=$('eCategory').value==='Personalizada'?$('eCustom').value.trim():$('eCategory').value;
+ const items=expenseItems(),description=$('eDescription').value.trim(),purchaseDate=$('eDate').value,category=$('eCategory').value;
  const cents=Math.round(items.reduce((sum,item)=>sum+item.qty*item.unit,0)*100);
  if(!description||!category||!items.length||items.some(item=>!item.name||!Number.isFinite(item.qty)||item.qty<=0||!Number.isFinite(item.unit)||item.unit<0))return alert('Informe título, categoria e itens com quantidade e preço corretos.');
  const paymentMethod=$('ePaymentMethod').value;let plan;
@@ -560,6 +605,19 @@ function saveExpense(){
  db.transactions.push(...transactions);persist();closeModal();renderAll();
 }
 function renderPersonal(){renderPersonalFinance()}
+function initializeTasksFeature(epoch){
+ const requireFinance=()=>unlocked&&capabilities.finance&&!sessionClosing&&epoch===sessionEpoch;
+ const taskRequest=async(action,body={})=>{
+  if(!requireFinance())throw Error('Entre novamente para acessar as tarefas.');
+  const result=await api(action,body);
+  if(!requireFinance())throw Error('A sessão mudou. Abra as tarefas novamente.');
+  return result;
+ };
+ tasksFeature=createTasksFeature({$,esc,modal,requireFinance,loadTasks:()=>taskRequest('tasksList'),mutateTask:taskRequest});
+}
+function openTasks(){return tasksFeature?.openTasks()}
+function saveTask(){return tasksFeature?.saveTask()}
+function completeTask(id){return tasksFeature?.completeTask(id)}
 
 let registered=false,setupAvailable=false,authReady=false,authBusy=false,registrationMode=false,passwordChangeProfile=null;
 async function loadView(path){const response=await fetch('/views/'+path+'.html?v=secure-views-1',{credentials:'same-origin'});if(!response.ok)throw Error('Não foi possível carregar as telas. Recarregue a página.');return response.text()}
@@ -582,7 +640,7 @@ function updateAuthForm(){
  const changing=passwordChangeProfile!==null,creating=registrationMode&&!changing;
  $('authAction').disabled=!authReady||authBusy;
  $('authAction').textContent=!authReady?'Aguarde…':changing?'Salvar nova senha e entrar':creating?'Criar acesso inicial':'Entrar';
- $('authHeading').textContent=changing?'Defina sua nova senha':creating?'Ativar conta inicial':'Entrar no Finança Fácil';
+ $('authHeading').textContent=changing?'Defina sua nova senha':creating?'Ativar conta inicial':'Entrar no Easy Finance';
  $('authMessage').textContent=changing?'Escolha uma nova senha para continuar.':creating?'Use o código de ativação fornecido pelo responsável.':'Entre com seu usuário e sua senha.';
  $('authPasswordLabel').textContent=changing||creating?'Nova senha':'Sua senha';
  $('authPasswordHelp').textContent=changing||creating?'Escolha de 10 a 128 caracteres.':'Use a senha cadastrada para sua conta.';
@@ -614,7 +672,7 @@ async function startSession(result){
  db=result.data;revision=result.revision;saveChain=Promise.resolve();saveFailed=false;passwordChangeProfile=null;clinicFeatures=null;clearManagementDashboard();
  if(!await mountAuthorizedViews(epoch))return;
  unlocked=true;document.body.classList.toggle('personal-mode',profile==='personal');$('authVeil').classList.add('hidden');clearAuthSecrets();
- const displayName=currentUsername?currentUsername.charAt(0).toUpperCase()+currentUsername.slice(1):'Usuário';$('headerGreeting').textContent='Olá, '+displayName;$('profileIcon').textContent=currentUsername.slice(0,2).toUpperCase()||'FF';$('headerEyebrow').textContent=capabilities.clinic?'GESTÃO DO CONSULTÓRIO':'SUAS FINANÇAS, SEUS PLANOS';renderNavigation();navigate(capabilities.clinic?'home':'pessoal');
+ const displayName=currentUsername?currentUsername.charAt(0).toUpperCase()+currentUsername.slice(1):'Usuário';$('headerGreeting').textContent='Olá, '+displayName;$('profileIcon').disabled=false;$('headerEyebrow').textContent=capabilities.clinic?'GESTÃO DO CONSULTÓRIO':'SUAS FINANÇAS, SEUS PLANOS';initializeTasksFeature(epoch);renderNavigation();navigate(capabilities.clinic?'home':'pessoal');
 }
 async function authSubmit(){
  if(authBusy||!authReady)return;
@@ -635,8 +693,8 @@ async function lockApp(){
  if(managementBusy||sessionClosing)return;
  sessionClosing=true;document.body.classList.add('session-closing');
  try{await saveChain;await api('logout')}catch(error){sessionClosing=false;document.body.classList.remove('session-closing');alert('Não foi possível encerrar a sessão: '+error.message);return}
- sessionEpoch++;unlocked=false;profile=null;currentUsername='';capabilities=Object.freeze({finance:false,clinic:false,admin:false});clinicFeatures=null;db=initial();revision=0;saveFailed=false;saveChain=Promise.resolve();passwordChangeProfile=null;registrationMode=false;
- closeModal();clearManagementDashboard();$('appContent').replaceChildren();$('mainNav').replaceChildren();$('mainNav').classList.add('hidden');$('headerGreeting').textContent='Bem-vindo';$('profileIcon').textContent='FF';document.body.classList.remove('dashboard-mode','personal-mode','session-closing');$('authUsername').value='';clearAuthSecrets();$('authVeil').classList.remove('hidden');$('authFeedback').textContent='';sessionClosing=false;updateAuthForm();
+ sessionEpoch++;tasksFeature=null;unlocked=false;profile=null;currentUsername='';capabilities=Object.freeze({finance:false,clinic:false,admin:false});clinicFeatures=null;db=initial();revision=0;saveFailed=false;saveChain=Promise.resolve();passwordChangeProfile=null;registrationMode=false;
+ closeModal();clearManagementDashboard();$('appContent').replaceChildren();$('mainNav').replaceChildren();$('mainNav').classList.add('hidden');$('headerGreeting').textContent='Bem-vindo';$('profileIcon').disabled=true;document.body.classList.remove('dashboard-mode','personal-mode','session-closing');$('authUsername').value='';clearAuthSecrets();$('authVeil').classList.remove('hidden');$('authFeedback').textContent='';sessionClosing=false;updateAuthForm();
 }
 async function signOut(){if(saveFailed&&!confirm('Existem alterações não salvas. Deseja sair mesmo assim?'))return;await lockApp()}
 function openPersonalAppointment(){if(requireClinic())openAppointment('',{type:'personal'})}
@@ -645,8 +703,8 @@ function removeExpenseLine(node){node.parentElement.remove();updateExpenseTotal(
 function installEvents(){
  const publicActions=new Set(['authSubmit','initAuth','updateAuthForm','toggleAuthPassword','toggleRegistration','lockApp','closeModal','closeModalBackdrop']);
  const clinicalActions=new Set(['openService','saveService','deleteService','openClient','saveClient','deleteClient','openClientHistory','openCompleteAppointment','saveAppointmentCompletion','openAppointment','openPersonalAppointment','saveAppointment','toggleAppointmentType','appointmentServices','toggleAppointmentNotes','updateApStatus','appointmentActions','openWhatsApp','cancelAppointment','openFreeSlot','changeDate','renderAgenda','renderClients','saveSettings']);
- const adminActions=new Set(['openManagementDashboard','loadManagementDashboard','renderManagementDashboard','saveDashboardSettings','dashboardOpenRecurring','dashboardSaveRecurring','dashboardOpenService','dashboardSaveService','dashboardDeleteService']);
- const actions={authSubmit,initAuth,updateAuthForm,toggleAuthPassword,toggleRegistration,lockApp,closeModal,closeModalBackdrop,signOut,navigate,openIncome,saveIncome,openExpense,saveExpense,deleteTransaction,renderPersonal,renderFinance,renderReservePage,openFinanceExpenses,financeOpenBalance,financeSaveBalance,financeOpenPayment,financeSavePayment,financeCancelBill,financeOpenPlan,financeSavePlan,financeUpdatePlanMode,financeOpenBill,financeSaveBill,financeChangeBillsMonth,financeOpenRecurring,financeSaveRecurring,financeUpdateRecurringType,financeSettingsMonthChanged,addExpenseLine,removeExpenseLine,updateExpenseTotal,updateExpensePayment,updateExpensePaymentPreview,syncExpensePurchaseDate,suggestExpenseCategory,openService,saveService,deleteService,openClient,saveClient,deleteClient,openClientHistory,openCompleteAppointment,saveAppointmentCompletion,openAppointment,openPersonalAppointment,saveAppointment,toggleAppointmentType,appointmentServices,toggleAppointmentNotes,updateApStatus,appointmentActions,openWhatsApp,cancelAppointment,openFreeSlot,changeDate,renderAgenda,renderClients,saveSettings,openManagementDashboard,loadManagementDashboard,renderManagementDashboard,saveDashboardSettings,dashboardOpenRecurring,dashboardSaveRecurring,dashboardOpenService,dashboardSaveService,dashboardDeleteService};
+ const adminActions=new Set(['openManagementDashboard','loadManagementDashboard','renderManagementDashboard','saveDashboardSettings','dashboardOpenRecurring','dashboardSaveRecurring','dashboardOpenService','dashboardSaveService','dashboardDeleteService','dashboardOpenExpenses','dashboardRequestExpenseRemoval','dashboardConfirmExpenseRemoval']);
+ const actions={authSubmit,initAuth,updateAuthForm,toggleAuthPassword,toggleRegistration,lockApp,closeModal,closeModalBackdrop,signOut,navigate,openIncome,saveIncome,openExpense,saveExpense,deleteTransaction,renderPersonal,renderFinance,renderReservePage,openFinanceExpenses,financeOpenBalance,financeSaveBalance,financeOpenPayment,financeSavePayment,financeCancelBill,financeOpenPlan,financeSavePlan,financeUpdatePlanMode,financeChangeBillsMonth,financeOpenRecurring,financeSaveRecurring,financeUpdateRecurringType,financeSettingsMonthChanged,financeSaveCardLimits,openTasks,saveTask,completeTask,addExpenseLine,removeExpenseLine,updateExpenseTotal,updateExpensePayment,updateExpensePaymentPreview,syncExpensePurchaseDate,suggestExpenseCategory,openService,saveService,deleteService,openClient,saveClient,deleteClient,openClientHistory,openCompleteAppointment,saveAppointmentCompletion,openAppointment,openPersonalAppointment,saveAppointment,toggleAppointmentType,appointmentServices,toggleAppointmentNotes,updateApStatus,appointmentActions,openWhatsApp,cancelAppointment,openFreeSlot,changeDate,renderAgenda,renderClients,saveSettings,openManagementDashboard,loadManagementDashboard,renderManagementDashboard,saveDashboardSettings,dashboardOpenRecurring,dashboardSaveRecurring,dashboardOpenService,dashboardSaveService,dashboardDeleteService,dashboardOpenExpenses,dashboardRequestExpenseRemoval,dashboardConfirmExpenseRemoval};
  installActionEvents({document,actions,allow:name=>!sessionClosing&&(publicActions.has(name)||unlocked&&(clinicalActions.has(name)?requireClinic():adminActions.has(name)?capabilities.admin:capabilities.finance)),onError:error=>{console.error('UI action failed',error);alert(error.message||'Não foi possível concluir.')}});
  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('modalBack').classList.contains('show')){event.preventDefault();closeModal()}});
 }

@@ -24,6 +24,9 @@ const context = vm.createContext({
   modal(title, html) { modalHtml = html; },
   alert(message) { alerts.push(message); }, confirm: () => true,
   renderSpendingForm: () => '<div id="purchase-entry">Itens da compra</div>',
+  financeReserveRecurringHtml: () => '',
+  financeIndicatorsHtml: month => `<section id="finance-indicators-placeholder" data-month="${month}"></section>`,
+  financeCardLimitsForm: month => `<section id="card-limits-placeholder" data-month="${month}"></section>`,
   showSpendingFields() { node('spendingMounted').checked = true; },
 });
 const uiPath = new URL('../finance-ui.js', import.meta.url);
@@ -40,6 +43,8 @@ context.renderPersonalFinance();
 assert.match(node('personalFinanceContent').innerHTML, /R\$ 1000\.00/, 'available balance uses the opening balance');
 assert.match(node('personalFinanceContent').innerHTML, /&lt;Aluguel&gt;/, 'bill descriptions are escaped');
 assert.match(node('personalFinanceContent').innerHTML, /[Ss]em previs|[Aa] definir/, 'unknown estimates remain visible');
+assert.match(node('personalFinanceContent').innerHTML, /finance-indicators-placeholder/, 'shared monthly indicators are included');
+assert.doesNotMatch(node('personalFinanceContent').innerHTML, /finance-quick-actions|Planejar mês/, 'quick action row and plan button are absent');
 assert.doesNotMatch(node('personalFinanceContent').innerHTML, />\s*<Aluguel>/);
 node('financeMonth').value='2026-10';
 context.profile='podo';
@@ -49,9 +54,9 @@ node('financeMonth').value='2026-11';
 context.renderPersonalFinance('studioFinanceContent','financeMonth');
 assert.doesNotMatch(node('studioFinanceContent').innerHTML,/&lt;Aluguel&gt;/,'Raquel financial month is independent from the hidden personal month');
 context.profile='personal';
-context.openFinanceExpenses('spending');
-assert.match(modalHtml, /Contas/);
-assert.match(modalHtml, /Gastos/);
+context.openFinanceExpenses();
+assert.ok(modalHtml.indexOf('Gastos diários') < modalHtml.indexOf('Contas do mês'), 'spending tab appears first');
+assert.doesNotMatch(modalHtml, /Conta avulsa/, 'standalone bill entry is removed');
 assert.match(modalHtml, /purchase-entry/);
 assert.equal(node('spendingMounted').checked, true);
 
@@ -87,6 +92,7 @@ assert.equal(context.db.finance.adjustments.length, 1);
 assert.equal(core.currentBalance(context.db, '2026-10-22'), 800);
 context.renderFinanceSettings();
 assert.match(node('financeSettingsContent').innerHTML, /Conferência do extrato/);
+assert.match(node('financeSettingsContent').innerHTML, /card-limits-placeholder/, 'monthly card limits appear in settings');
 assert.doesNotMatch(node('financeSettingsContent').innerHTML, /deleteAdjustment|Excluir ajuste/);
 
 context.financeOpenPayment(unknown.id);
@@ -94,14 +100,17 @@ assert.match(modalHtml, /[Ss]em previs|[Aa] definir/, 'unknown bill payment asks
 core.setMonthPlan(context.db, '2026-10', { expectedIncome: 5000, reserveMode: 'percentage', reserveValue: 10, reserveDueDay: 31 });
 node('reserveMonth').value = '2026-10';
 context.renderReservePage();
-assert.match(node('reserveContent').innerHTML, /R\$ 500\.00/, 'reserve view displays the percentage target');
-node('financePlanIncome_reserve').value = '6000';
-node('financePlanMode_reserve').value = 'percentage';
-node('financePlanValue_reserve').value = '15';
-node('financePlanDue_reserve').value = '12';
-context.financeSavePlan('2026-10', 'reserve');
-assert.equal(context.db.finance.monthlyPlans.find(plan => plan.month === '2026-10').expectedIncome, 6000, 'reserve editor reads its own fields even when settings are also mounted');
-assert.equal(context.db.finance.bills.find(item => item.source === 'reserve').expectedAmount, 900);
+assert.doesNotMatch(node('reserveContent').innerHTML, /Planejar reserva mensal|financePlanIncome_reserve/, 'reserve planning remains in settings only');
+assert.match(node('reserveContent').innerHTML, /Reservado no mês/, 'reserve page shows actual launched amount');
+const reserveBill = context.db.finance.bills.find(item => item.source === 'reserve');
+context.financeOpenPayment(reserveBill.id);
+node('financePayAmount').value = '500';
+node('financePayDate').value = '2026-10-22';
+node('financePayMethod').value = 'debit';
+context.financeSavePayment(reserveBill.id);
+context.renderReservePage();
+assert.match(node('reserveContent').innerHTML, /Histórico da reserva/);
+assert.match(node('reserveContent').innerHTML, /R\$ 500\.00/, 'reserve page shows the amount actually paid');
 node('personalMonth').value = '2026-11';
 context.renderPersonalFinance();
 assert.doesNotMatch(node('personalFinanceContent').innerHTML, /&lt;Aluguel&gt;/, 'changing the selected month changes the bills shown');

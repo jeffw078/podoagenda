@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {validateCardLimits} from '../finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 import { test } from 'node:test';
@@ -147,7 +148,7 @@ test('working hours remain editable with personal commitments outside work or du
 
 test('API accepts personal commitments but rejects personal prices and linked income',async()=>{
   const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
-  const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue});
+  const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue,validateCardLimits});
   const f=fixture();
   const personal={id:'p1',type:'personal',title:'Academia',date:'2026-10-22',time:'07:00',duration:60,status:'agendado',price:0,clientId:null,serviceIds:[]};
   f.db.appointments.push(personal);assert.equal(validate(f.db),true);

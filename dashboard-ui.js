@@ -19,6 +19,24 @@ async function loadManagementDashboard(){
  }catch(error){if(epoch===managementEpoch)$('dashboardContent').innerHTML='<div class="notice warn">'+esc(error.message)+'</div>'}
 }
 function dashboardAccount(target){const account=managementAccounts.find(item=>item.profile===target);if(!account)throw Error('Ambiente indisponível. Atualize o painel.');return account}
+function dashboardOpenExpenses(target){
+ if(!dashboardAllowed()||managementBusy)return;
+ const account=dashboardAccount(target),finance=FinanceCore.ensure(account.data);
+ const row=(kind,id,title,detail,amount)=>'<article class="expense-admin-row"><div><strong>'+esc(title)+'</strong><small>'+esc(detail)+' · '+money(amount)+'</small></div><button class="btn danger small" onclick="dashboardRequestExpenseRemoval('+esc(JSON.stringify(target))+','+esc(JSON.stringify(kind))+','+esc(JSON.stringify(id))+')">Excluir</button></article>';
+ const purchases=finance.creditPurchases.map(purchase=>row('credit',purchase.id,purchase.description,({nubank:'Nubank',mercado_pago:'Mercado Pago'})[purchase.cardId]+' · '+purchase.installments.length+' parcela(s)',purchase.amount));
+ const expenses=account.data.transactions.filter(item=>item.type==='expense').map(item=>row('transaction',item.id,item.description,item.date.split('-').reverse().join('/')+(item.billId?' · Pagamento de conta':''),item.amount));
+ const history=(finance.expenseRemovals||[]).slice().reverse().map(item=>'<div class="item"><div><b>'+esc(item.reason)+'</b><small>'+esc(item.actor)+' · '+esc(new Date(item.removedAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}))+'</small><small>'+esc(item.record?.purchase?.description||item.record?.transaction?.description||'Despesa removida')+'</small></div></div>').join('');
+ modal('Gerenciar despesas · '+(target==='podo'?'Raquel':'Jefferson'),'<p class="notice">Ao excluir uma compra no crédito, as parcelas são retiradas das faturas pendentes. Faturas já pagas permanecem no histórico. Ao excluir o pagamento de uma conta, ela volta a ficar pendente.</p><h3>Compras no cartão</h3>'+ (purchases.join('')||'<p class="empty">Nenhuma compra no crédito.</p>')+'<h3>Saídas e pagamentos</h3>'+(expenses.join('')||'<p class="empty">Nenhuma despesa lançada.</p>')+'<div class="divider"></div><h3>Histórico de exclusões</h3>'+(history||'<p class="empty">Nenhuma exclusão registrada.</p>'));
+}
+function dashboardRequestExpenseRemoval(target,kind,id){
+ if(!dashboardAllowed()||managementBusy)return;
+ modal('Excluir despesa',formHtml('<p class="notice warn">A exclusão ficará registrada com seu nome e o motivo informado. Confira o lançamento antes de confirmar.</p><label class="field">Motivo da exclusão<textarea id="adminExpenseReason" required maxlength="500" rows="3"></textarea></label>','dashboardConfirmExpenseRemoval('+JSON.stringify(target)+','+JSON.stringify(kind)+','+JSON.stringify(id)+')','Confirmar exclusão'));
+}
+async function dashboardConfirmExpenseRemoval(target,kind,id){
+ if(!dashboardAllowed()||managementBusy)return;
+ const reason=$('adminExpenseReason').value.trim();if(!reason)return alert('Informe o motivo da exclusão.');
+ try{await dashboardSave(target,{kind,id,reason},'adminRemoveExpense');if(dashboardAllowed())dashboardOpenExpenses(target);}catch(error){alert(error.message);}
+}
 function dashboardInput(label,id,type,value,extra=''){return '<label class="field">'+label+'<input id="'+id+'" type="'+type+'" value="'+esc(value??'')+'" '+extra+'></label>'}
 function dashboardEnvironment(account,month){
  const data=account.data,schedule=account.configuration?.clinicSchedule,catalog=account.configuration?.serviceCatalog||[];FinanceCore.ensureCreditCards(data,month);FinanceCore.syncMonth(data,month);
@@ -35,9 +53,10 @@ function dashboardEnvironment(account,month){
  '<div class="divider"></div><h3>Planejamento de '+esc(month.split('-').reverse().join('/'))+'</h3>'+dashboardInput('Renda prevista do mês (R$)',p+'_income','number',plan.expectedIncome,'min="0" step="0.01" required')+
  '<div class="fields two"><label class="field">Meta da reserva<select id="'+p+'_mode"><option value="amount" '+(plan.reserveMode==='amount'?'selected':'')+'>Valor fixo em reais</option><option value="percentage" '+(plan.reserveMode==='percentage'?'selected':'')+'>Percentual da renda prevista</option></select></label>'+dashboardInput('Valor ou percentual',p+'_reserve','number',plan.reserveValue,'min="0" step="0.01" required')+'</div>'+dashboardInput('Dia de vencimento da reserva',p+'_day','number',plan.reserveDueDay,'min="1" max="31" step="1" required')+
  (studio?'<div class="divider"></div><h3>Jornada da agenda</h3><div class="fields two">'+dashboardInput('Início',p+'_start','time',schedule.start,'required')+dashboardInput('Fim',p+'_end','time',schedule.end,'required')+'</div><div class="fields two">'+dashboardInput('Início do almoço',p+'_lunch','time',schedule.lunch,'required')+dashboardInput('Almoço (minutos)',p+'_lunchDuration','number',schedule.lunchDuration,'min="60" max="240" step="1" required')+'</div>':'')+
- '<button class="btn full" type="submit">Salvar configurações</button></form>'+
+ '<h3>Limites de uso do cartão no mês</h3><div class="fields two">'+['nubank','mercado_pago'].map(cardId=>dashboardInput(({nubank:'Nubank',mercado_pago:'Mercado Pago'})[cardId]+' (R$)',p+'_limit_'+cardId,'number',finance.cardLimits?.find(limit=>limit.month===month&&limit.cardId===cardId)?.amount??'','min="0" step="0.01"')).join('')+'</div><button class="btn full" type="submit">Salvar configurações</button></form>'+
  '<div class="card"><div class="flex"><h3>Contas recorrentes</h3><button class="btn secondary small" onclick="dashboardOpenRecurring(\''+account.profile+'\')">+ Recorrência</button></div>'+(finance.recurringBills.map((rule,index)=>'<div class="item"><div><b>'+esc(rule.description)+'</b><small>'+(rule.fixed?'Fixa':'Variável')+' · '+(rule.cardId?'Fatura automática':rule.expectedAmount===null?'Valor a definir':money(rule.expectedAmount))+' · dia '+rule.dueDay+' · '+(rule.active?'Ativa':'Pausada')+'</small></div><button class="btn outline small" onclick="dashboardOpenRecurring(\''+account.profile+'\','+index+')">Editar</button></div>').join('')||'<p class="muted">Nenhuma recorrência cadastrada.</p>')+'</div>'+
  (studio?'<div class="card"><div class="flex"><h3>Serviços</h3><button class="btn secondary small" onclick="dashboardOpenService()">+ Serviço</button></div>'+catalog.map((service,index)=>service.archived?'':'<div class="item"><div><b>'+esc(service.name)+'</b><small>'+service.duration+' min · '+money(service.price)+'</small></div><button class="btn outline small" onclick="dashboardOpenService('+index+')">Editar</button><button class="btn danger small" onclick="dashboardDeleteService('+index+')">Excluir</button></div>').join('')+'</div>':'')+
+ '<div class="card"><h3>Despesas lançadas</h3><p class="footer-note">Exclusão restrita ao administrador, com motivo e histórico.</p><button class="btn outline" onclick="dashboardOpenExpenses(\''+account.profile+'\')">Gerenciar despesas</button></div>'+
  '<div class="card"><h3>Histórico de correções de saldo</h3>'+(finance.adjustments.slice().reverse().slice(0,10).map(a=>'<div class="item"><div><b>'+esc(a.reason)+'</b><small>'+esc(a.date)+' · '+money(a.before)+' → '+money(a.after)+'</small></div><span>'+money(a.delta)+'</span></div>').join('')||'<p class="muted">Nenhuma correção registrada.</p>')+'</div></article>';
 }
 function renderManagementDashboard(){
@@ -47,7 +66,7 @@ function renderManagementDashboard(){
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return;
  $('dashboardContent').innerHTML='<div class="dashboard-grid">'+managementAccounts.map(account=>dashboardEnvironment(account,month)).join('')+'</div>';
 }
-async function dashboardSave(target,patch){
+async function dashboardSave(target,patch,action='adminSaveSettings'){
  if(!dashboardAllowed())throw Error('Acesso restrito a Jefferson.');
  if(managementBusy)throw Error('Aguarde o salvamento em andamento.');
  managementBusy=true;const epoch=managementEpoch;
@@ -55,7 +74,7 @@ async function dashboardSave(target,patch){
  controls.forEach(([control])=>control.disabled=true);document.body.classList.add('management-saving');
  try{
   await saveChain;if(saveFailed)throw Error('Há alterações não salvas neste aparelho. Recarregue a página.');
-  const account=dashboardAccount(target),result=await api('adminSaveSettings',{targetProfile:target,revision:account.revision,...patch});
+  const account=dashboardAccount(target),result=await api(action,{targetProfile:target,revision:account.revision,...patch});
   if(epoch!==managementEpoch||!dashboardAllowed())return;
   Object.assign(account,result);
   if(target===profile){
@@ -75,6 +94,11 @@ async function saveDashboardSettings(target){
    if(!data.finance?.openingBalance||Math.round(amount*100)!==Math.round(current*100))FinanceCore.setCurrentBalance(data,amount,dateToday,$(p+'_reason').value.trim());
   }
   FinanceCore.setMonthPlan(data,month,{expectedIncome:Number($(p+'_income').value),reserveMode:$(p+'_mode').value,reserveValue:Number($(p+'_reserve').value),reserveDueDay:Number($(p+'_day').value)});
+  for(const cardId of ['nubank','mercado_pago']){
+   const control=$(p+'_limit_'+cardId);if(!control)continue;
+   if(control.value.trim()===''){if(data.finance.cardLimits)data.finance.cardLimits=data.finance.cardLimits.filter(limit=>limit.month!==month||limit.cardId!==cardId);}
+   else FinanceInsights.setCardLimit(data,month,cardId,Number(control.value));
+  }
   const patch={finance:data.finance};
   if(target==='podo')patch.settings={start:$(p+'_start').value,end:$(p+'_end').value,lunch:$(p+'_lunch').value,lunchDuration:Number($(p+'_lunchDuration').value)};
   await dashboardSave(target,patch);

@@ -6,6 +6,9 @@ import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
 import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis } from '../lib/access-control.js';
 import '../finance-core.js';
+import { validateCardLimits } from '../finance-insights.js';
+import { createTask, completeTask, validateTasks } from '../lib/tasks.js';
+import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-removals.js';
 
 let connectionUrl, database;
 const getSql = () => {
@@ -21,8 +24,8 @@ function tokenFrom(req){const cookies=(req.headers.cookie||'').split(';').map(x=
 const tokenHash=t=>createHash('sha256').update(t).digest('hex');
 async function logged(req){const token=tokenFrom(req);if(!/^[a-f0-9]{64}$/.test(token))return null;const rows=await sql`SELECT u.id,u.profile,u.username,u.password_change_required,u.password_hash,u.password_salt,u.data,u.revision,s.token_hash FROM studio_sessions s JOIN studio_accounts u ON u.id=s.account_id WHERE s.token_hash=${tokenHash(token)} AND s.expires_at>NOW()`;return rows[0]||null}
 const profileName=x=>x==='podo'?'podo':x==='personal'?'personal':null;
-function validateData(data){if(!data||typeof data!=='object'||Array.isArray(data))return false;const arrays=['services','clients','appointments','transactions'];if(arrays.some(k=>!Array.isArray(data[k])||data[k].length>25000))return false;if(!data.settings||typeof data.settings!=='object')return false;if(data.appointments.some(a=>!a||typeof a!=='object'))return false;if(data.clients.some(client=>!objectValue(client)||client.anamnesis!==undefined&&!validAnamnesis(client.anamnesis)))return false;const personalIds=new Set(data.appointments.filter(a=>a.type==='personal').map(a=>a.id));for(const tr of data.transactions){if(!tr||!['income','expense'].includes(tr.type)||typeof tr.description!=='string'||tr.description.length>500||!/^\d{4}-\d{2}-\d{2}$/.test(tr.date)||!Number.isFinite(tr.amount)||tr.amount<0||tr.amount>100000000||tr.type==='income'&&personalIds.has(tr.appointmentId))return false}for(const appointment of data.appointments){if(appointment.treatmentNotes!==undefined&&(typeof appointment.treatmentNotes!=='string'||appointment.treatmentNotes.length>10000))return false;if(appointment.type==='personal'){if(typeof appointment.title!=='string'||!appointment.title.trim()||appointment.title.length>120||appointment.price!==0||appointment.clientId!==null||!Array.isArray(appointment.serviceIds)||appointment.serviceIds.length||!Number.isInteger(appointment.duration)||appointment.duration<5||appointment.duration>1440||!/^\d{4}-\d{2}-\d{2}$/.test(appointment.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(appointment.time)||!['agendado','concluido','cancelado'].includes(appointment.status))return false;const [hour,minute]=appointment.time.split(':').map(Number);if(hour*60+minute+appointment.duration>1440)return false}}return data.finance===undefined||globalThis.FinanceCore.validateFinance(data)}
-const validFinanceChange=(previous,next)=>(previous.finance===undefined&&next.finance===undefined)||globalThis.FinanceCore.validateFinanceChange(previous,next);
+function validateData(data){if(!data||typeof data!=='object'||Array.isArray(data))return false;const arrays=['services','clients','appointments','transactions'];if(arrays.some(k=>!Array.isArray(data[k])||data[k].length>25000))return false;if(!data.settings||typeof data.settings!=='object')return false;if(data.appointments.some(a=>!a||typeof a!=='object'))return false;if(data.clients.some(client=>!objectValue(client)||client.anamnesis!==undefined&&!validAnamnesis(client.anamnesis)))return false;const personalIds=new Set(data.appointments.filter(a=>a.type==='personal').map(a=>a.id));for(const tr of data.transactions){if(!tr||!['income','expense'].includes(tr.type)||typeof tr.description!=='string'||tr.description.length>500||!/^\d{4}-\d{2}-\d{2}$/.test(tr.date)||!Number.isFinite(tr.amount)||tr.amount<0||tr.amount>100000000||tr.type==='income'&&personalIds.has(tr.appointmentId))return false}for(const appointment of data.appointments){if(appointment.treatmentNotes!==undefined&&(typeof appointment.treatmentNotes!=='string'||appointment.treatmentNotes.length>10000))return false;if(appointment.type==='personal'){if(typeof appointment.title!=='string'||!appointment.title.trim()||appointment.title.length>120||appointment.price!==0||appointment.clientId!==null||!Array.isArray(appointment.serviceIds)||appointment.serviceIds.length||!Number.isInteger(appointment.duration)||appointment.duration<5||appointment.duration>1440||!/^\d{4}-\d{2}-\d{2}$/.test(appointment.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(appointment.time)||!['agendado','concluido','cancelado'].includes(appointment.status))return false;const [hour,minute]=appointment.time.split(':').map(Number);if(hour*60+minute+appointment.duration>1440)return false}}return data.finance===undefined||validateCardLimits(data.finance.cardLimits===undefined?[]:data.finance.cardLimits)&&globalThis.FinanceCore.validateFinance(data)}
+const validFinanceChange=(previous,next)=>expenseHistoryUnchanged(previous,next)&&((previous.finance===undefined&&next.finance===undefined)||globalThis.FinanceCore.validateFinanceChange(previous,next));
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 function validSchedule(data){
  const s=data.settings,time=/^([01]\d|2[0-3]):[0-5]\d$/;
@@ -94,6 +97,39 @@ export default async function handler(req,res){
    return issueSession(res,changed[0]);
   }
   if(user.password_change_required)return send(res,403,{error:'Troque sua senha temporária antes de acessar os dados.',code:'PASSWORD_CHANGE_REQUIRED'});
+  if(['tasksList','tasksCreate','tasksComplete'].includes(action)){
+   const shared=user.profile==='personal'&&user.username==='jefferson'||user.profile==='podo'&&user.username==='raquel';
+   const scope=shared?'owners':'account:'+user.id;
+   await sql`INSERT INTO studio_task_lists(scope) VALUES(${scope}) ON CONFLICT DO NOTHING`;
+   const [list]=await sql`SELECT data,revision FROM studio_task_lists WHERE scope=${scope}`;
+   if(!validateTasks(list.data))return send(res,500,{error:'Lista de tarefas inválida.'});
+   if(action==='tasksList')return send(res,200,{tasks:list.data,revision:list.revision});
+   if(!Number.isInteger(body.revision)||body.revision!==list.revision)return send(res,409,{error:'As tarefas foram atualizadas por outra pessoa. Abra a lista novamente.'});
+   let tasks;
+   try{tasks=action==='tasksCreate'?createTask(list.data,{title:body.title,dueDate:body.dueDate},user.username||'Usuário',new Date().toISOString()):completeTask(list.data,body.id,user.username||'Usuário',new Date().toISOString());}
+   catch(error){return send(res,400,{error:error.message});}
+   if(tasks.length>2000)return send(res,400,{error:'Limite de tarefas atingido.'});
+   if(JSON.stringify(tasks)===JSON.stringify(list.data))return send(res,200,{tasks:list.data,revision:list.revision});
+   const rows=await sql`UPDATE studio_task_lists SET data=${JSON.stringify(tasks)}::jsonb,revision=revision+1,updated_at=NOW() WHERE scope=${scope} AND revision=${body.revision} RETURNING data,revision`;
+   if(!rows.length)return send(res,409,{error:'As tarefas foram atualizadas por outra pessoa. Abra a lista novamente.'});
+   return send(res,200,{tasks:rows[0].data,revision:rows[0].revision});
+  }
+  if(action==='adminRemoveExpense'){
+   if(user.username!=='jefferson'||user.profile!=='personal')return send(res,403,{error:'Acesso restrito ao administrador.'});
+   const targetProfile=profileName(body.targetProfile),targetUsername=targetProfile==='personal'?'jefferson':'raquel';
+   if(!targetProfile||!Number.isInteger(body.revision))return send(res,400,{error:'Dados inválidos.'});
+   const [target]=await sql`SELECT id,data,revision FROM studio_accounts WHERE profile=${targetProfile} AND username=${targetUsername}`;
+   if(!target)return send(res,404,{error:'Perfil não encontrado.'});
+   if(target.revision!==body.revision)return send(res,409,{error:'Dados atualizados em outro aparelho. Recarregue o painel.'});
+   let prepared;
+   try{prepared=prepareExpenseRemoval(target.data,{kind:body.kind,id:body.id,reason:body.reason},user.username,new Date().toISOString(),globalThis.FinanceCore);}
+   catch(error){return send(res,400,{error:error.message});}
+   if(!validateData(prepared.data))return send(res,400,{error:'Dados financeiros inválidos.'});
+   if(Buffer.byteLength(JSON.stringify(prepared.data))>2_000_000)return send(res,413,{error:'Histórico muito grande.'});
+   const rows=await sql`UPDATE studio_accounts SET data=${JSON.stringify(prepared.data)}::jsonb,revision=revision+1,updated_at=NOW() WHERE id=${target.id} AND revision=${body.revision} RETURNING data,revision`;
+   if(!rows.length)return send(res,409,{error:'Dados atualizados em outro aparelho. Recarregue o painel.'});
+   return send(res,200,adminAccountView({...rows[0],profile:targetProfile,username:targetUsername}));
+  }
   if(action==='adminOverview'||action==='adminSaveSettings'){
    if(user.username!=='jefferson'||user.profile!=='personal')return send(res,403,{error:'Acesso restrito ao administrador.'});
    if(action==='adminOverview'){

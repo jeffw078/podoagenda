@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS studio_sessions (
   expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS studio_sessions_expires_at_idx ON studio_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS studio_task_lists (
+  scope TEXT PRIMARY KEY,
+  data JSONB NOT NULL DEFAULT '[]'::jsonb,
+  revision INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ALTER TABLE studio_accounts ADD COLUMN IF NOT EXISTS username TEXT;
 ALTER TABLE studio_accounts ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE UNIQUE INDEX IF NOT EXISTS studio_accounts_username_idx ON studio_accounts(username);
