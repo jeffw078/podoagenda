@@ -9,7 +9,12 @@ const bundle=source.replace(/\bon(click|submit|input|change)=/g,'data-on$1=');
 await writeFile(outputUrl('assets/app.bundle.js'),bundle);
 const clientAssets=['finance-browser.js','ui-actions.js','clinic-features.js','tasks-ui.js','finance-ui.css','dashboard-ui.css','finance-widgets.css'];
 await Promise.all([
- ...clientAssets.map(file=>copyFile(sourceUrl(file),outputUrl('assets/'+file))),
+ ...clientAssets.map(async file=>{
+  if(file!=='finance-browser.js')return copyFile(sourceUrl(file),outputUrl('assets/'+file));
+  // The source uses its canonical shared path; published modules are siblings.
+  const bridge=await readFile(sourceUrl(file),'utf8');
+  return writeFile(outputUrl('assets/'+file),bridge.replace("'../shared/finance-core.js'","'./finance-core.js'"));
+ }),
  ...['finance-core.js','finance-insights.js'].map(file=>copyFile(new URL('../src/shared/'+file,import.meta.url),outputUrl('assets/'+file))),
  ...['common','personal','clinic','admin'].map(name=>copyFile(sourceUrl('views/'+name+'.html'),outputUrl('views/'+name+'.html')))
 ]);

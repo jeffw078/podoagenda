@@ -37,4 +37,8 @@ for(const file of published.filter(file=>file.endsWith('.js'))){
  }
 }
 assert.doesNotMatch(await readFile(join(publicRoot,'assets/app.bundle.js'),'utf8'),/\son(?:click|submit|input|change)=/,'Generated templates use delegated actions');
+for(const file of (await files(resolve(root,'src/client'))).filter(file=>file.endsWith('.js'))){
+ const source=await readFile(file,'utf8');
+ for(const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"](\.[^'"]+)['"]/g))assert.ok((await stat(resolve(dirname(file),match[1]))).isFile(),'Source imports must resolve before building');
+}
 console.log('OK: public output excludes private/source files; HTML, styles and module dependencies resolve.');

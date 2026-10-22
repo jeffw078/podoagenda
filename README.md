@@ -25,7 +25,7 @@ npm run build
 npm run dev
 ```
 
-`npm run dev` inicia o app com o servidor de desenvolvimento da Vercel. Para trabalhar com banco local, copie `.env.example` para `.env.local` e defina `DATABASE_URL` para um banco PostgreSQL de desenvolvimento. `npm run db:init` aplica o schema ao banco indicado nesse ambiente. Confira o destino antes de executar o comando; não aponte os comandos locais para produção.
+`npm run dev` inicia o app com o servidor de desenvolvimento da Vercel. Para desenvolver, copie `.env.example` para `.env.local` e defina `DATABASE_URL` para um banco PostgreSQL de desenvolvimento. `npm run db:init` aplica o schema ao banco indicado nesse ambiente. As ferramentas de manutenção e importação usam explicitamente o banco configurado em `.env.local`.
 
 ## Verificações
 
