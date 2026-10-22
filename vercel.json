@@ -5,6 +5,8 @@
       "includeFiles": "schema.sql"
     }
   },
+  "framework": null,
+  "outputDirectory": ".",
   "buildCommand": "npm run build",
   "headers": [
     {
