@@ -8,3 +8,4 @@ node_modules/
 .account-setup.local.json
 .browser-check/
 .card-invoices*.local.json
+.account-reviewer*.local.json

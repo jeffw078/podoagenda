@@ -139,4 +139,26 @@ await usernameOnly.run('authSubmit()');
 assert.equal(usernameOnly.calls.at(-1).action,'login');
 assert.equal(usernameOnly.calls.at(-1).payload.profile,'personal','Username chooses its own profile without profile buttons');
 assert.equal(usernameOnly.calls.at(-1).payload.username,'jefferson');
+for(const personalAccounts of [[{profile:'personal',username:'jefferson'},{profile:'personal',username:'filla'}],[{profile:'personal',username:'filla'},{profile:'personal',username:'jefferson'}]]){
+ const multiUser=fixture();
+ multiUser.setResponse({registered:['podo','personal'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'},...personalAccounts]});
+ await multiUser.run('initAuth()');
+ assert.equal(multiUser.run('profileForUsername("jefferson")'),'personal');
+ assert.equal(multiUser.run('profileForUsername(" FILLA ")'),'personal');
+ assert.equal(multiUser.run('profileForUsername("constructor")'),null);
+ multiUser.element('authUsername').value=' FILLA ';
+ multiUser.element('authPassword').value='SyntheticFriend123!';
+ multiUser.run('syncLoginProfile()');
+ assert.equal(multiUser.element('authUsername').value,' FILLA ','Selecting a profile preserves the entered account');
+ assert.equal(multiUser.element('authPassword').value,'SyntheticFriend123!','Profile detection preserves an autofilled password');
+ await multiUser.run('authSubmit()');
+ assert.equal(multiUser.calls.at(-1).action,'login');
+ assert.equal(multiUser.calls.at(-1).payload.profile,'personal');
+ assert.equal(multiUser.calls.at(-1).payload.username,'filla');
+ assert.equal(multiUser.calls.at(-1).payload.password,'SyntheticFriend123!');
+ multiUser.element('authUsername').value='jefferson';
+ multiUser.element('authPassword').value='SyntheticOwner123!';
+ await multiUser.run('authSubmit()');
+ assert.equal(multiUser.calls.at(-1).payload.username,'jefferson');
+}
 console.log('OK: autenticação, recuperação da API, usuários nomeados e troca obrigatória da senha temporária.');

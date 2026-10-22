@@ -14,6 +14,8 @@ const db=new PGlite();
 try {
   const schema=await readFile(new URL('../schema.sql',import.meta.url),'utf8');
   await db.exec(schema.split('ALTER TABLE')[0]);
+  const oldProfileConstraint=await db.query("SELECT conname FROM pg_constraint WHERE conrelid='studio_accounts'::regclass AND conname='studio_accounts_profile_key'");
+  if(!oldProfileConstraint.rows.length)await db.exec('ALTER TABLE studio_accounts ADD CONSTRAINT studio_accounts_profile_key UNIQUE(profile)');
   await db.query("INSERT INTO studio_accounts(profile,password_salt,password_hash,data) VALUES('podo','old-salt','old-hash','{\"preserved\":true}')");
   const sql=async(strings,...values)=>{
     const statement=strings.reduce((text,part,index)=>text+(index?'$'+index:'')+part,'');
@@ -28,7 +30,7 @@ try {
   const {publicKey,privateKey}=generateKeyPairSync('ed25519');
   const deps={neon:()=>sql,randomBytes,createHash,readDatabaseUrl,databaseFailure,schemaAwareSql,hashPassword,passMatches,accountView,verifyProvisioning:body=>verifyProvisioning(body,Date.now(),publicKey)};
   const source=(await readFile(new URL('../api/index.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace('export default async function handler','async function handler');
-  const factory=vm.runInNewContext('(function(deps){const {'+Object.keys(deps).join(',')+'}=deps;\n'+source+'\nreturn handler;})',{FinanceCore:globalThis.FinanceCore,crypto:webcrypto,Buffer,URL,process:{env:{DATABASE_URL:'postgresql://test:test@db.example/test'}},console});
+  const factory=vm.runInNewContext('(function(deps){const {'+Object.keys(deps).join(',')+'}=deps;\n'+source+'\nreturn handler;})',{FinanceCore:globalThis.FinanceCore,crypto:webcrypto,Buffer,URL,process:{env:{DATABASE_URL:'postgresql://test:test@db.example/test',SETUP_CODE:'Example-Setup-Only!'}},console});
   const handler=factory(deps);
   const request=async(body,cookie)=>{
     const headers={};let result;
@@ -49,6 +51,23 @@ try {
   assert.equal((await request(body)).status,409);
   const status=await request({action:'status'});
   assert.equal(status.body.accounts.length,2);
+  const reviewerPassword='Reviewer-Example-Only!',reviewerSalt=randomBytes(16).toString('hex');
+  const reviewerData={services:[],clients:[],appointments:[],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
+  await db.query("INSERT INTO studio_accounts(profile,username,password_salt,password_hash,password_change_required,data) VALUES('personal','filla',$1,$2,FALSE,$3::jsonb)",[reviewerSalt,hashPassword(reviewerPassword,reviewerSalt),JSON.stringify(reviewerData)]);
+  const reviewerLogin=await request({action:'login',username:'filla',profile:'personal',password:reviewerPassword});
+  assert.equal(reviewerLogin.status,200,'A second personal account logs in by its username');
+  assert.equal(reviewerLogin.body.username,'filla');assert.equal(reviewerLogin.body.mustChangePassword,false);
+  const reviewerCookie=reviewerLogin.cookie;
+  assert.equal((await request({action:'login',username:'filla',password:reviewerPassword})).status,200);
+  assert.equal((await request({action:'login',username:'filla',profile:'podo',password:reviewerPassword})).status,401);
+  const multipleStatus=(await request({action:'status'})).body;
+  assert.equal(multipleStatus.accounts.length,3);assert.equal(multipleStatus.registered.length,2);
+  assert.equal((await request({action:'register',profile:'personal',password:'Example-New-Password!',setupCode:'Example-Setup-Only!'})).status,409,'Bootstrap registration cannot create another personal account after setup');
+  assert.equal((await request({action:'login',username:'filla',profile:'personal',password:'Wrong-Example-Only!'})).status,401);
+  assert.equal((await db.query("SELECT login_failures FROM studio_accounts WHERE username='jefferson'")).rows[0].login_failures,0,'Failed tester login does not lock out Jefferson');
+  await assert.rejects(db.query("INSERT INTO studio_accounts(profile,username,password_salt,password_hash) VALUES('podo','other-podo','salt','hash')"),error=>error.code==='23505','The studio profile remains unique');
+  assert.equal((await request({action:'adminOverview'},reviewerCookie)).status,403);
+  assert.equal((await request({action:'adminSaveSettings',targetProfile:'personal',revision:0,settings:{}},reviewerCookie)).status,403);
 
   for(const account of accounts) {
     const login=await request({action:'login',profile:account.profile,username:account.username,password:account.password});
@@ -96,6 +115,7 @@ try {
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'personal',revision:1,settings:{}},raquel.cookie)).status,403);
   const overview=await request({action:'adminOverview'},jefferson.cookie);
   assert.equal(overview.status,200);assert.equal(overview.body.accounts.length,2);
+  assert.deepEqual(overview.body.accounts.map(a=>a.username).sort(),['jefferson','raquel']);
   for(const item of overview.body.accounts)assert.deepEqual(Object.keys(item).sort(),['data','profile','revision','username']);
   const podo=overview.body.accounts.find(account=>account.profile==='podo');
   const personalBefore=(await request({action:'me'},jefferson.cookie)).body;
@@ -212,6 +232,22 @@ try {
   assert.deepEqual(importedRoundtrip.data.transactions,personalInvoices.data.transactions);
   assert.equal(prepareInvoiceImport(importedRoundtrip.data,{username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2099-01',amount:50.01,dueDate:'2099-01-07'},{cardId:'mercado_pago',month:'2099-01',amount:25,dueDate:'2099-01-17'}]}).changed,false);
   console.log('OK PostgreSQL: assisted card invoice import and idempotent roundtrip, preserving cash transactions.');
+  const ownersBefore=await db.query("SELECT username,data,revision FROM studio_accounts WHERE username IN ('jefferson','raquel') ORDER BY username");
+  const reviewerState=(await request({action:'me'},reviewerCookie)).body;
+  assert.deepEqual(reviewerState.data,reviewerData,'A tester never inherits owner records');
+  const reviewerEdit=structuredClone(reviewerState.data);
+  globalThis.FinanceCore.ensureCreditCards(reviewerEdit,'2026-10');
+  globalThis.FinanceCore.setCurrentBalance(reviewerEdit,75,'2026-10-22');
+  assert.equal((await request({action:'save',revision:reviewerState.revision,data:reviewerEdit,profile:'personal',username:'jefferson'},reviewerCookie)).status,200,'Extra body fields cannot redirect writes to Jefferson');
+  assert.equal((await request({action:'me'},reviewerCookie)).body.data.finance.openingBalance.amount,75);
+  assert.deepEqual((await db.query("SELECT username,data,revision FROM studio_accounts WHERE username IN ('jefferson','raquel') ORDER BY username")).rows,ownersBefore.rows);
+  const personalAdminBefore=(await request({action:'me'},jefferson.cookie)).body;
+  const adminPersonal=await request({action:'adminSaveSettings',targetProfile:'personal',revision:personalAdminBefore.revision,settings:personalAdminBefore.data.settings},jefferson.cookie);
+  assert.equal(adminPersonal.status,200);
+  assert.equal((await request({action:'me'},reviewerCookie)).body.data.finance.openingBalance.amount,75,'Admin personal settings resolve Jefferson rather than another personal account');
+  assert.equal((await request({action:'logout'},reviewerCookie)).status,200);
+  assert.equal((await request({action:'me'},reviewerCookie)).status,401);
+  console.log('OK PostgreSQL: multiple personal accounts, username login, owner/tester isolation and Jefferson-only dashboard.');
   console.log('OK PostgreSQL: admin future installments, immutable paid history/audit and service catalog deletion with historical preservation.');
   console.log('OK PostgreSQL: independent Nubank/Mercado Pago purchases, exact installments, roundtrip, rejected tampering and single invoice payment.');
   console.log('OK PostgreSQL: username login, admin permissions, target isolation, original records and optimistic revisions.');

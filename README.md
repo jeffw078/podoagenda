@@ -1,6 +1,6 @@
 # Meu Studio — Neon (versão para Vercel)
 
-Dois usuários com acesso por nome e senha: Raquel entra no consultório e Jefferson no controle pessoal. O navegador usa a API da Vercel; os dados ficam no PostgreSQL do Neon. Sem `DATABASE_URL` o app não consegue funcionar. O painel conjunto e a edição das configurações dos dois ambientes são exclusivos do Jefferson.
+Usuários com acesso por nome e senha: Raquel entra no consultório e Jefferson no controle pessoal. Contas pessoais adicionais têm os mesmos controles financeiros, com dados próprios e sem dashboard. O navegador usa a API da Vercel; os dados ficam no PostgreSQL do Neon. Sem `DATABASE_URL` o app não consegue funcionar. O painel conjunto e a edição das configurações dos dois ambientes são exclusivos do Jefferson.
 
 ## Publicar
 
@@ -29,9 +29,7 @@ ter permissão para criar as tabelas. O arquivo `schema.sql` é incluído na fun
 pela configuração da Vercel. Também é possível executar `schema.sql` no SQL Editor do Neon,
 acessível pela área Storage da Vercel.
 
-Os comandos `CREATE ... IF NOT EXISTS` permitem repetir a inicialização,
-mas não atualizam a estrutura de tabelas que já existam com as mesmas
-identificações. Este schema não importa os dados da versão anterior.
+Os comandos `CREATE ... IF NOT EXISTS` e as migrações explícitas permitem repetir a inicialização. O schema adiciona as colunas de usuários e permite várias contas pessoais nomeadas, preservando a unicidade do consultório e de contas legadas sem usuário. A migração não altera documentos nem senhas existentes. Este schema não importa os dados da versão anterior.
 
 Na Vercel, configure `DATABASE_URL` e `SETUP_CODE` no ambiente do deploy.
 Depois de alterar as variáveis, faça um novo deploy. `.env.local`, outros
@@ -69,7 +67,7 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 - Se a API estiver indisponível, a tela informa a falha e permite tentar novamente; ela não oferece criar uma conta sem conseguir verificar os perfis existentes.
 - `npm test` verifica autenticação, agenda, histórico, parcelas, núcleo financeiro, interface e permissões do dashboard usando PostgreSQL local em memória (PGlite). Não acessa o banco de produção. `npm run test:browser` exercita os formulários e navegação em Chrome/Edge headless com uma API local de teste e salva capturas em `.browser-check/`, ignorada pelo Git. Use `BROWSER_PATH` se o navegador não estiver em um caminho conhecido.
 
-- Duas contas isoladas pela sessão autenticada; a exceção é o painel administrativo autorizado do Jefferson.
+- Contas isoladas pela sessão autenticada. O painel administrativo autorizado do Jefferson mostra somente os dois ambientes principais, Raquel e Jefferson. Contas pessoais adicionais não aparecem nesse dashboard nem podem acessá-lo.
 - Financeiro nos dois espaços: entradas, despesas com linhas detalhadas, categorias e agrupamento por mês; gráficos por categoria.
 - Podologia: clientes, serviços, agenda, bloqueio de almoço de pelo menos 60 minutos e encaixes.
 - Sessão HttpOnly, Secure e SameSite=Lax. Senhas com `scrypt` e salt único. Bloqueio temporário após oito senhas incorretas. Proteção de edição simultânea por revisão; conflitos geram alerta para recarregar.
@@ -81,6 +79,12 @@ O arquivo privado `.card-invoices.local.json` contém `username`, `capturedDate`
 `npm run cards:import -- --offline` confere o arquivo. `npm run cards:import` prepara a prévia no Neon configurado. `npm run cards:import -- --apply` grava somente na conta pessoal do Jefferson, criando backup local e conferindo a revisão. A conexão deve apontar para o banco do site, com essa conta já cadastrada. A ausência da conta interrompe a operação.
 
 O lançamento usa os totais de cada fatura como referência e desconta as compras já cadastradas naquele banco/mês, evitando somá-las duas vezes. Novas compras posteriores continuam somando normalmente. Faturas pagas/canceladas, valores já importados divergentes e parcelas antigas sem identificação do banco exigem conciliação antes da gravação. Repetir o mesmo arquivo não duplica as faturas nem desfaz compras posteriores.
+
+## Contas pessoais adicionais
+
+O arquivo privado `.account-reviewer.local.json` recebe `username` e `password` e fica ignorado pelo Git. `npm run accounts:create-personal` mostra a prévia; acrescente `-- --apply` para aplicar a migração e criar a conta no Neon configurado. Publique primeiro a API com suporte a múltiplas contas pessoais.
+
+A conta começa com documentos vazios e os dois cartões disponíveis, com senha armazenada como hash com salt próprio. Não recebe os dados do Jefferson e não exige troca da senha escolhida pelo responsável. O script não sobrescreve usuários ou senhas existentes. Os nomes principais são reservados; somente Jefferson pode abrir o dashboard. Login e gravações identificam a conta pelo usuário e pela sessão, enquanto `personal` identifica apenas o conjunto de telas disponíveis.
 
 ## Limites desta entrega
 

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS studio_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  profile TEXT NOT NULL UNIQUE CHECK (profile IN ('podo','personal')),
+  profile TEXT NOT NULL CHECK (profile IN ('podo','personal')),
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -18,3 +18,6 @@ CREATE INDEX IF NOT EXISTS studio_sessions_expires_at_idx ON studio_sessions(exp
 ALTER TABLE studio_accounts ADD COLUMN IF NOT EXISTS username TEXT;
 ALTER TABLE studio_accounts ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE UNIQUE INDEX IF NOT EXISTS studio_accounts_username_idx ON studio_accounts(username);
+CREATE UNIQUE INDEX IF NOT EXISTS studio_accounts_podo_profile_idx ON studio_accounts(profile) WHERE profile='podo';
+CREATE UNIQUE INDEX IF NOT EXISTS studio_accounts_legacy_profile_idx ON studio_accounts(profile) WHERE username IS NULL;
+ALTER TABLE studio_accounts DROP CONSTRAINT IF EXISTS studio_accounts_profile_key;

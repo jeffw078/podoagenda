@@ -271,25 +271,26 @@ async function initAuth(){
  registered=null;setupAvailable=false;chooseProfile(profile);$('authRetry').classList.add('hidden');$('authFeedback').textContent='Verificando conexão…';
  try{
   const out=await api('status');if(!Array.isArray(out.registered))throw Error('Resposta inválida');
-  registered=out.registered;setupAvailable=out.setupAvailable!==false;accountNames=Object.fromEntries((out.accounts||[]).filter(a=>a.username).map(a=>[a.profile,a.username]));
+  registered=out.registered;setupAvailable=out.setupAvailable!==false;accountNames=Object.fromEntries((out.accounts||[]).filter(a=>a.username).map(a=>[String(a.username).trim().toLowerCase(),a.profile]));
   const me=await api('me').catch(()=>null);if(me){profile=me.profile;startSession(me);return}
   chooseProfile(profile);
  }catch(e){registered=null;chooseProfile(profile);$('authMessage').textContent='Não foi possível verificar seu acesso. Nenhuma senha foi criada ou alterada.';$('authFeedback').textContent=e.message||'Falha de conexão com o sistema. Tente novamente em instantes.';$('authAction').textContent='Acesso indisponível';$('authRetry').classList.remove('hidden')}
 }
 async function lockApp(){try{await saveChain;await api('logout')}catch(e){console.error(e)}unlocked=false;passwordChangeProfile=null;db=initial();revision=0;saveFailed=false;closeModal();$('authVeil').classList.remove('hidden');chooseProfile(profile)}
 async function signOut(){if(typeof managementBusy!=='undefined'&&managementBusy)return;if(saveFailed&&!confirm('Existem alterações não salvas. Deseja sair mesmo assim?'))return;await lockApp();currentUsername='';if(typeof clearManagementDashboard==='function')clearManagementDashboard();document.body.classList.remove('dashboard-mode')}
-function profileForUsername(username){const normalized=String(username||'').trim().toLowerCase();return Object.entries({podo:'raquel',personal:'jefferson',...accountNames}).find(([,name])=>name===normalized)?.[0]||null}
-function syncLoginProfile(){if(authBusy||passwordChangeProfile)return;const next=profileForUsername($('authUsername').value);if(next&&next!==profile)chooseProfile(next)}
-function chooseProfile(next){
+function profileForUsername(username){const normalized=String(username||'').trim().toLowerCase(),profiles={raquel:'podo',jefferson:'personal',...accountNames};return Object.hasOwn(profiles,normalized)?profiles[normalized]:null}
+function syncLoginProfile(){if(authBusy||passwordChangeProfile)return;const next=profileForUsername($('authUsername').value);if(next&&next!==profile)chooseProfile(next,true)}
+function chooseProfile(next,preserveCredentials=false){
  if(authBusy||passwordChangeProfile)return;
  if(unlocked){lockApp().then(()=>{if(profile!==next)chooseProfile(next)});return}
+ const typedUsername=$('authUsername').value,typedPassword=$('authPassword').value;
  profile=next;unlocked=false;closeModal();document.body.classList.toggle('personal-mode',next==='personal');
  $('authVeil').classList.remove('hidden');clearAuthSecrets();$('authCancel').classList.add('hidden');
  const known=Array.isArray(registered),has=known&&registered.includes(next),creating=known&&!has&&setupAvailable,name=next==='podo'?'Podologia':'Pessoal';
  $('authHeading').textContent=known?(has?'Entrar em ':'Primeiro acesso · ')+name:'Acesso ao sistema';
  $('authMessage').textContent=!known?'Verificando os perfis disponíveis…':has?'Entre com sua senha. No primeiro acesso, use a senha temporária recebida.':setupAvailable?'Este perfil ainda não tem acesso. Escolha sua senha para começar.':'Este perfil ainda não foi ativado. Solicite a ativação ao responsável pelo sistema.';
  $('authPasswordLabel').textContent=creating?'Crie sua senha':'Sua senha';$('authPasswordHelp').textContent=creating?'Escolha uma senha de 10 a 128 caracteres. Não existe senha inicial padrão.':'Use a senha cadastrada para este perfil.';
- $('usernameBox').classList.remove('hidden');$('authUsername').value=accountNames[next]||(next==='personal'?'jefferson':'raquel');$('authUsername').disabled=false;$('authUsername').required=true;$('authUsername').readOnly=false;
+ $('usernameBox').classList.remove('hidden');$('authUsername').value=preserveCredentials?typedUsername:(next==='personal'?'jefferson':'raquel');if(preserveCredentials)$('authPassword').value=typedPassword;$('authUsername').disabled=false;$('authUsername').required=true;$('authUsername').readOnly=false;
  $('authPassword').autocomplete=creating?'new-password':'current-password';$('authPassword').minLength=creating?10:1;$('authPassword').disabled=!known||(!has&&!creating);
  $('authAction').textContent=!known?'Aguarde…':has?'Entrar':creating?'Criar senha e acessar':'Aguardando ativação';$('authAction').disabled=!known||(!has&&!creating);
  $('confirmBox').classList.toggle('hidden',!creating);$('authPasswordConfirm').required=creating;$('authPasswordConfirm').disabled=!creating;
@@ -309,10 +310,10 @@ function showPasswordChange(result){
  $('setupBox').classList.add('hidden');$('setupCode').disabled=true;$('setupCode').required=false;
  $('authAction').textContent='Salvar nova senha e entrar';$('authAction').disabled=false;$('authFeedback').textContent='';$('authPassword').focus();
 }
-function startSession(result){if(result.mustChangePassword){showPasswordChange(result);return}passwordChangeProfile=null;profile=result.profile;currentUsername=result.username||'';db=result.data;revision=result.revision;saveFailed=false;saveChain=Promise.resolve();unlocked=true;document.body.classList.toggle('personal-mode',profile==='personal');$('authVeil').classList.add('hidden');clearAuthSecrets();$('headerGreeting').textContent=profile==='personal'?'Olá, Jefferson':'Olá, Raquel';$('headerEyebrow').textContent=profile==='personal'?'SUAS FINANÇAS, SEUS PLANOS':'GESTÃO DO CONSULTÓRIO';$('profileIcon').textContent=profile==='personal'?'JE':'RA';if(typeof clearManagementDashboard==='function')clearManagementDashboard();renderNavigation();navigate(profile==='personal'?'pessoal':'home')}
+function startSession(result){if(result.mustChangePassword){showPasswordChange(result);return}passwordChangeProfile=null;profile=result.profile;currentUsername=result.username||'';db=result.data;revision=result.revision;saveFailed=false;saveChain=Promise.resolve();unlocked=true;document.body.classList.toggle('personal-mode',profile==='personal');$('authVeil').classList.add('hidden');clearAuthSecrets();const displayName=currentUsername?currentUsername.charAt(0).toUpperCase()+currentUsername.slice(1):'Usuário';$('headerGreeting').textContent='Olá, '+displayName;$('headerEyebrow').textContent=profile==='personal'?'SUAS FINANÇAS, SEUS PLANOS':'GESTÃO DO CONSULTÓRIO';$('profileIcon').textContent=currentUsername.slice(0,2).toUpperCase()||'US';if(typeof clearManagementDashboard==='function')clearManagementDashboard();renderNavigation();navigate(profile==='personal'?'pessoal':'home')}
 async function authSubmit(){
  if(authBusy||!Array.isArray(registered))return;
- if(passwordChangeProfile===null){const next=profileForUsername($('authUsername').value);if(!next){$('authFeedback').textContent='Informe um usuário cadastrado: raquel ou jefferson.';return}profile=next;$('authUsername').value=$('authUsername').value.trim().toLowerCase()}
+ if(passwordChangeProfile===null){const next=profileForUsername($('authUsername').value);if(!next){$('authFeedback').textContent='Informe seu usuário cadastrado.';return}profile=next;$('authUsername').value=$('authUsername').value.trim().toLowerCase()}
  const password=$('authPassword').value,has=registered.includes(profile),changing=passwordChangeProfile!==null;
  if(!changing&&!has&&!setupAvailable)return;
  const minimum=changing||!has?10:1;

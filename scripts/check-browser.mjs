@@ -12,19 +12,19 @@ const browserPath=[process.env.BROWSER_PATH,'C:/Program Files/Google/Chrome/Appl
 if(!browserPath){console.log('Browser check skipped: set BROWSER_PATH to Chromium/Edge.');process.exit(0)}
 const clone=value=>JSON.parse(JSON.stringify(value));
 const initial=()=>({settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60},clients:[],appointments:[],transactions:[],services:[{id:'hands',name:'Cuidados com as mãos',duration:60,price:80}]});
-const accounts=[{profile:'podo',username:'raquel',data:initial(),revision:0},{profile:'personal',username:'jefferson',data:initial(),revision:0}];
-let signedIn='personal';const requests=[];
+const accounts=[{profile:'podo',username:'raquel',data:initial(),revision:0},{profile:'personal',username:'jefferson',data:initial(),revision:0},{profile:'personal',username:'filla',data:initial(),revision:0}];
+let signedIn='jefferson';const requests=[];
 const server=createServer(async(req,res)=>{
  try{
   res.setHeader('Cache-Control','no-store');
   if(req.url==='/api'){
    let body='';for await(const chunk of req)body+=chunk;
-   const input=JSON.parse(body),current=accounts.find(a=>a.profile===signedIn);requests.push(input.action);
+   const input=JSON.parse(body),current=accounts.find(a=>a.username===signedIn);requests.push(input.action);
    res.setHeader('Content-Type','application/json');
    const send=(code,data)=>{res.statusCode=code;res.end(JSON.stringify(data))};
    if(input.action==='status')return send(200,{registered:['podo','personal'],accounts:accounts.map(({profile,username})=>({profile,username})),setupAvailable:false});
    if(input.action==='logout'){signedIn=null;return send(200,{ok:true})}
-   if(input.action==='login'){signedIn=input.username==='raquel'?'podo':'personal';return send(200,{...accounts.find(a=>a.profile===signedIn),mustChangePassword:false})}
+   if(input.action==='login'){const target=accounts.find(a=>a.username===input.username);if(!target||target.profile!==input.profile)return send(401,{error:'Credenciais inválidas'});signedIn=target.username;return send(200,{...target,mustChangePassword:false})}
    if(!current)return send(401,{error:'Sem sessão'});
    if(input.action==='me')return send(200,{...current,mustChangePassword:false});
    if(input.action==='save'){
@@ -33,9 +33,9 @@ const server=createServer(async(req,res)=>{
     current.data=input.data;current.revision++;return send(200,{revision:current.revision});
    }
    if(current.username!=='jefferson')return send(403,{error:'Acesso restrito'});
-   if(input.action==='adminOverview')return send(200,{accounts});
+   if(input.action==='adminOverview')return send(200,{accounts:accounts.filter(account=>['jefferson','raquel'].includes(account.username))});
    if(input.action==='adminSaveSettings'){
-    const target=accounts.find(a=>a.profile===input.targetProfile);
+    const target=accounts.find(a=>a.username===(input.targetProfile==='personal'?'jefferson':'raquel'));
     if(input.revision!==target.revision)return send(409,{error:'Revisão divergente'});
     target.data={...target.data,...('finance'in input?{finance:input.finance}:{}),...('settings'in input?{settings:input.settings}:{}),...('services'in input?{services:input.services}:{})};target.revision++;return send(200,{data:target.data,revision:target.revision});
    }
@@ -164,7 +164,29 @@ try{
  await evaluate("$('signOutButton').click()");
  await waitFor("!unlocked&&!$('authVeil').classList.contains('hidden')");
  assert.equal(signedIn,null,'Both profiles can end their server session from the header');
- console.log('OK real browser: shared finances in both profiles, required card selection, bank invoices/installments, one cash deduction per invoice, independent records, reserve/settings, desktop dashboard and mobile layout.');
+ const ownerRecords=clone(accounts.slice(0,2));
+ await evaluate("$('authUsername').value='filla';$('authPassword').value='SyntheticFriend123!';syncLoginProfile();document.querySelector('#authForm').requestSubmit()");
+ await waitFor("unlocked&&currentUsername==='filla'");
+ assert.equal(signedIn,'filla');
+ assert.equal(await evaluate('profile'),'personal');
+ assert.equal(await evaluate("$('headerGreeting').textContent"),'Olá, Filla');
+ assert.equal(await evaluate("$('profileIcon').textContent"),'FI');
+ assert.ok(await evaluate("$('dashboardAccess').classList.contains('hidden')"),'Friend has no dashboard entry');
+ assert.ok(await evaluate("!document.querySelector('nav').textContent.includes('Clientes')"),'Personal accounts do not show client management');
+ assert.equal(await evaluate('db.transactions.length'),0,'Friend starts with separate records');
+ assert.equal(await evaluate('db.finance.creditPurchases.length'),0,'Friend does not inherit card purchases');
+ await evaluate("navigate('dashboard')");
+ assert.equal(await evaluate("document.querySelector('.page.active').id"),'pessoal','Friend cannot navigate directly into the dashboard');
+ assert.equal(await evaluate("fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'adminOverview'})}).then(response=>response.status)"),403,'Friend cannot fetch admin data');
+ assert.equal(await evaluate("fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'adminSaveSettings',targetProfile:'personal',revision:0})}).then(response=>response.status)"),403,'Friend cannot change owner settings');
+ await evaluate("navigate('configuracoes');financeOpenBalance();$('financeBalanceAmount').value='200';document.querySelector('#modalContent form').requestSubmit();saveChain");
+ assert.equal(await evaluate('FinanceCore.currentBalance(db,dateToday)'),200);
+ assert.equal(accounts[2].data.finance.openingBalance.amount,200,'Friend saves to his own account');
+ assert.deepEqual(accounts.slice(0,2),ownerRecords,'Friend saves preserve both owner accounts and revisions');
+ await evaluate("$('signOutButton').click()");
+ await waitFor("!unlocked&&!$('authVeil').classList.contains('hidden')");
+ assert.equal(signedIn,null);
+ console.log('OK real browser: shared finances, credit invoices/installments, isolated personal users, owner-only dashboard, reserve/settings, desktop and mobile layout.');
  console.log('Screenshots: .browser-check/desktop-dashboard.png and .browser-check/mobile-personal.png');
  await call('Browser.close');
 }finally{

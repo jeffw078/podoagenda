@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {preparePersonalAccount} from '../lib/personal-accounts.js';
+import {passMatches} from '../lib/passwords.js';
+const password='Reviewer-Example-Only!',account=preparePersonalAccount({username:' Reviewer ',password});
+assert.equal(account.username,'reviewer');assert.equal(account.profile,'personal');
+assert.equal(passMatches(password,account.salt,account.hash),true);
+assert.equal(passMatches('Different-Example!',account.salt,account.hash),false);
+assert.equal(JSON.stringify(account).includes(password),false,'Prepared database rows never contain plaintext passwords');
+for(const field of ['services','clients','appointments','transactions'])assert.deepEqual(account.data[field],[]);
+assert.equal(account.data.finance.openingBalance,null);assert.equal(account.data.finance.creditPurchases.length,0);
+assert.deepEqual(account.data.finance.recurringBills.map(rule=>rule.cardId).sort(),['mercado_pago','nubank']);
+const second=preparePersonalAccount({username:'other',password});assert.notEqual(account.salt,second.salt);assert.notEqual(account.hash,second.hash);
+assert.notEqual(account.data,second.data);assert.notEqual(account.data.finance,second.data.finance);
+for(const username of ['jefferson','raquel','JEFFERSON','x','space user','x'.repeat(41),null])assert.throws(()=>preparePersonalAccount({username,password}));
+for(const invalid of ['',null,'short','x'.repeat(129)])assert.throws(()=>preparePersonalAccount({username:'reviewer',password:invalid}));
+console.log('OK: additional personal accounts, salted passwords, reserved owners and empty independent financial data.');

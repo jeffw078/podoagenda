@@ -43,7 +43,7 @@ export default async function handler(req,res){
   if(!req.headers.origin||new URL(req.headers.origin).host!==req.headers.host)return send(res,403,{error:'Origem inválida'});
   const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
   const {action}=body;
-  if(action==='status'){const profiles=await sql`SELECT profile,username FROM studio_accounts`;return send(res,200,{registered:profiles.map(x=>x.profile),accounts:profiles,setupAvailable:Boolean(process.env.SETUP_CODE)})}
+  if(action==='status'){const profiles=await sql`SELECT profile,username FROM studio_accounts`;return send(res,200,{registered:[...new Set(profiles.map(x=>x.profile))],accounts:profiles,setupAvailable:Boolean(process.env.SETUP_CODE)})}
   if(action==='provision'){
    const accounts=verifyProvisioning(body);
    if(!accounts)return send(res,403,{error:'Autorização de criação inválida ou expirada'});
@@ -57,14 +57,16 @@ export default async function handler(req,res){
    if(!process.env.SETUP_CODE||typeof body.setupCode!=='string'||body.setupCode!==process.env.SETUP_CODE)return send(res,403,{error:'Código de configuração inválido'});
    if(!profile||typeof password!=='string'||password.length<10||password.length>128)return send(res,400,{error:'A senha precisa ter 10 a 128 caracteres'});
    const salt=randomBytes(16).toString('hex');const pass=hashPassword(password,salt);let created;
-   try{created=await sql`INSERT INTO studio_accounts (profile,password_salt,password_hash,data) VALUES (${profile},${salt},${pass},${JSON.stringify(defaultData())}::jsonb) RETURNING id,profile,data,revision`}
+   const username=profile==='personal'?'jefferson':'raquel';
+   try{created=await sql`INSERT INTO studio_accounts (profile,username,password_salt,password_hash,data) SELECT ${profile},${username},${salt},${pass},${JSON.stringify(defaultData())}::jsonb WHERE NOT EXISTS (SELECT 1 FROM studio_accounts WHERE profile=${profile}) ON CONFLICT DO NOTHING RETURNING id,profile,username,data,revision`}
    catch(e){if(e.code==='23505')return send(res,409,{error:'Este perfil já foi criado'});throw e}
+   if(!created.length)return send(res,409,{error:'Este perfil já foi criado'});
    return issueSession(res,created[0]);
   }
   if(action==='login'){
    const profile=profileName(body.profile),password=body.password,username=String(body.username||'').trim().toLowerCase(),explicitProfile=body.profile!==undefined;
    if((explicitProfile&&!profile)||(!explicitProfile&&!username)||typeof password!=='string'||password.length>128)return send(res,400,{error:'Dados de acesso inválidos'});
-   const rows=explicitProfile?await sql`SELECT id,profile,username,password_change_required,data,revision,password_salt,password_hash,locked_until FROM studio_accounts WHERE profile=${profile}`:await sql`SELECT id,profile,username,password_change_required,data,revision,password_salt,password_hash,locked_until FROM studio_accounts WHERE username=${username}`;
+   const rows=username?(explicitProfile?await sql`SELECT id,profile,username,password_change_required,data,revision,password_salt,password_hash,locked_until FROM studio_accounts WHERE username=${username} AND profile=${profile}`:await sql`SELECT id,profile,username,password_change_required,data,revision,password_salt,password_hash,locked_until FROM studio_accounts WHERE username=${username}`):await sql`SELECT id,profile,username,password_change_required,data,revision,password_salt,password_hash,locked_until FROM studio_accounts WHERE profile=${profile} AND username IS NULL`;
    if(rows[0]?.username&&username!==rows[0].username)return send(res,401,{error:'Usuário ou senha incorretos'});
    if(rows[0]?.locked_until && new Date(rows[0].locked_until)>new Date())return send(res,429,{error:'Muitas tentativas. Tente novamente em 15 minutos.'});
    if(!rows[0]||!passMatches(password,rows[0].password_salt,rows[0].password_hash)){if(rows[0])await sql`UPDATE studio_accounts SET login_failures=login_failures+1,locked_until=CASE WHEN login_failures+1>=8 THEN NOW()+INTERVAL '15 minutes' ELSE NULL END WHERE id=${rows[0].id}`;return send(res,401,{error:'Perfil ou senha incorretos'});}
@@ -94,12 +96,13 @@ export default async function handler(req,res){
   if(action==='adminOverview'||action==='adminSaveSettings'){
    if(user.username!=='jefferson'||user.profile!=='personal')return send(res,403,{error:'Acesso restrito ao administrador.'});
    if(action==='adminOverview'){
-    const accounts=await sql`SELECT profile,username,data,revision FROM studio_accounts ORDER BY profile`;
+    const accounts=await sql`SELECT profile,username,data,revision FROM studio_accounts WHERE (profile='personal' AND username='jefferson') OR (profile='podo' AND username='raquel') ORDER BY profile`;
     return send(res,200,{accounts});
    }
    const targetProfile=profileName(body.targetProfile);
    if(!targetProfile||!Number.isInteger(body.revision)||!['settings','finance','services'].some(key=>body[key]!==undefined))return send(res,400,{error:'Dados inválidos'});
-   const targets=await sql`SELECT id,data,revision FROM studio_accounts WHERE profile=${targetProfile}`;
+   const targetUsername=targetProfile==='personal'?'jefferson':'raquel';
+   const targets=await sql`SELECT id,data,revision FROM studio_accounts WHERE profile=${targetProfile} AND username=${targetUsername}`;
    if(!targets.length)return send(res,404,{error:'Perfil não encontrado.'});
    const target=targets[0];
    if(target.revision!==body.revision)return send(res,409,{error:'Dados atualizados em outro aparelho. Recarregue a página antes de salvar.'});

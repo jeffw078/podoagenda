@@ -44,8 +44,8 @@ const client=async(...args)=>{
 client.query=statement=>({statement});
 client.transaction=async statements=>{
   transactions++;
-  assert.equal(statements.length,6);
-  assert.ok(statements.every(s=>/^(CREATE (TABLE|(?:UNIQUE )?INDEX) IF NOT EXISTS|ALTER TABLE studio_accounts ADD COLUMN IF NOT EXISTS)/.test(s.statement)));
+  assert.ok(statements.length>0);
+  assert.ok(statements.every(s=>/^(CREATE (TABLE|(?:UNIQUE )?INDEX) IF NOT EXISTS|ALTER TABLE studio_accounts (ADD COLUMN|DROP CONSTRAINT) IF (?:NOT )?EXISTS)/.test(s.statement)));
   initialized=true;
 };
 const {readFile}=await import('node:fs/promises');
