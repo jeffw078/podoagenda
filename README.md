@@ -56,9 +56,9 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 - Histórico de atendimentos dentro do cadastro de cada cliente, com data, serviços, duração, valor, status e relato. A conclusão abre um campo livre para descrever o que foi feito; o relato também pode ser incluído ou editado depois. Serviços são registrados com os nomes e valores da conclusão para preservar o histórico quando o catálogo mudar. O pagamento continua sendo registrado separadamente.
 
-- Despesas com escolha obrigatória de débito, dinheiro ou crédito nos dois perfis. No crédito, escolha **Nubank** ou **Mercado Pago**, o número de parcelas (até 120) e o mês da primeira fatura. Cada parcela é somada à conta mensal do banco escolhido. As duas contas já aparecem nas recorrências; ajuste o vencimento em Configurações. O valor base adicional serve somente para valores ainda não cadastrados em Gastos e soma às compras, sem substituí-las. Faturas encerradas rejeitam novas parcelas; escolha outro mês inicial.
+- Despesas com escolha obrigatória de débito, dinheiro ou crédito nos dois perfis. No crédito, escolha **Nubank** ou **Mercado Pago**, o número de parcelas (até 120) e o mês da primeira fatura. Cada parcela é somada à conta mensal do banco escolhido. As duas contas já aparecem nas recorrências; ajuste o vencimento em Configurações. Faturas encerradas rejeitam novas parcelas; escolha outro mês inicial.
 - Compras no crédito têm histórico separado e não reduzem o disponível na compra. O pagamento da fatura em **Contas** gera uma única saída do saldo e preserva os valores previsto e pago. Débito e dinheiro continuam como despesas na data da compra. A divisão das parcelas preserva os centavos exatos.
-- Em **Jefferson → Configurações → Abrir dashboard → Cartões · parcelas futuras**, ajuste as parcelas de ambos os ambientes pelo botão **Editar parcelas futuras**. É possível alterar mês e valor, com motivo obrigatório, atualização das faturas e recálculo do total da compra. O histórico registra antes/depois. Parcelas de meses passados e de faturas pagas/canceladas são preservadas. Os meses devem continuar em ordem, sem duas parcelas da mesma compra no mesmo mês. O ajuste também está disponível no histórico de compras do próprio perfil.
+- Os formulários de ajuste manual do valor adicional dos cartões e de edição de parcelas futuras foram removidos. As novas compras continuam alimentando as faturas automaticamente. Registros e auditorias existentes são preservados.
 - Serviços da Raquel podem ser excluídos pelo cadastro ou pelo dashboard administrativo. Serviços sem uso são removidos; serviços vinculados a atendimentos saem do catálogo e das sugestões, preservando nome, valor e registros anteriores. Ao editar um atendimento existente, seu serviço anterior continua disponível.
 
 - Usuários nomeados: Raquel acessa Podologia; Jefferson acessa Pessoal. Contas criadas com senha temporária exigem a troca no primeiro acesso, antes de liberar dados ou gravações.
@@ -73,6 +73,14 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 - Financeiro nos dois espaços: entradas, despesas com linhas detalhadas, categorias e agrupamento por mês; gráficos por categoria.
 - Podologia: clientes, serviços, agenda, bloqueio de almoço de pelo menos 60 minutos e encaixes.
 - Sessão HttpOnly, Secure e SameSite=Lax. Senhas com `scrypt` e salt único. Bloqueio temporário após oito senhas incorretas. Proteção de edição simultânea por revisão; conflitos geram alerta para recarregar.
+
+## Lançamento assistido de faturas anteriores
+
+O arquivo privado `.card-invoices.local.json` contém `username`, `capturedDate` e uma lista `invoices` com `cardId`, `month`, `amount` e `dueDate`. Esse arquivo e os backups estão ignorados pelo Git; valores pessoais não fazem parte do código publicado.
+
+`npm run cards:import -- --offline` confere o arquivo. `npm run cards:import` prepara a prévia no Neon configurado. `npm run cards:import -- --apply` grava somente na conta pessoal do Jefferson, criando backup local e conferindo a revisão. A conexão deve apontar para o banco do site, com essa conta já cadastrada. A ausência da conta interrompe a operação.
+
+O lançamento usa os totais de cada fatura como referência e desconta as compras já cadastradas naquele banco/mês, evitando somá-las duas vezes. Novas compras posteriores continuam somando normalmente. Faturas pagas/canceladas, valores já importados divergentes e parcelas antigas sem identificação do banco exigem conciliação antes da gravação. Repetir o mesmo arquivo não duplica as faturas nem desfaz compras posteriores.
 
 ## Limites desta entrega
 

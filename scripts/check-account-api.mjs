@@ -8,6 +8,7 @@ import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
 import '../finance-core.js';
+import {prepareInvoiceImport} from '../lib/card-invoice-import.js';
 
 const db=new PGlite();
 try {
@@ -202,6 +203,15 @@ try {
   assert.deepEqual(archivedSaved.body.data.appointments,adminCreditSaved.body.data.appointments);
   assert.equal(archivedSaved.body.data.services.find(service=>service.id==='service-test').archived,true);
   assert.deepEqual((await request({action:'me'},jefferson.cookie)).body.data,cardDocuments[1],'Admin edits to Raquel preserve Jefferson records');
+  const personalInvoices=(await request({action:'me'},jefferson.cookie)).body;
+  const invoiceImport=prepareInvoiceImport(personalInvoices.data,{username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2099-01',amount:50.01,dueDate:'2099-01-07'},{cardId:'mercado_pago',month:'2099-01',amount:25,dueDate:'2099-01-17'}]});
+  const importSaved=await request({action:'save',revision:personalInvoices.revision,data:invoiceImport.data},jefferson.cookie);
+  assert.equal(importSaved.status,200,'Assisted invoice import passes the real API validators');
+  const importedRoundtrip=(await request({action:'me'},jefferson.cookie)).body;
+  assert.deepEqual(importedRoundtrip.data.finance.cardInvoiceImports,invoiceImport.data.finance.cardInvoiceImports);
+  assert.deepEqual(importedRoundtrip.data.transactions,personalInvoices.data.transactions);
+  assert.equal(prepareInvoiceImport(importedRoundtrip.data,{username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2099-01',amount:50.01,dueDate:'2099-01-07'},{cardId:'mercado_pago',month:'2099-01',amount:25,dueDate:'2099-01-17'}]}).changed,false);
+  console.log('OK PostgreSQL: assisted card invoice import and idempotent roundtrip, preserving cash transactions.');
   console.log('OK PostgreSQL: admin future installments, immutable paid history/audit and service catalog deletion with historical preservation.');
   console.log('OK PostgreSQL: independent Nubank/Mercado Pago purchases, exact installments, roundtrip, rejected tampering and single invoice payment.');
   console.log('OK PostgreSQL: username login, admin permissions, target isolation, original records and optimistic revisions.');

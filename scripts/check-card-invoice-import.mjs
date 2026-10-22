@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {normalizeInvoicePlan,prepareInvoiceImport} from '../lib/card-invoice-import.js';
+const F=globalThis.FinanceCore;
+const plan={username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2026-11',amount:100.01,dueDate:'2026-11-07'},{cardId:'mercado_pago',month:'2026-11',amount:50.5,dueDate:'2026-11-17'},{cardId:'mercado_pago',month:'2026-12',amount:30,dueDate:'2026-12-17'}]};
+const previous={transactions:[],clients:[{id:'keep'}],appointments:[],services:[],settings:{}};
+F.setCurrentBalance(previous,1000,'2026-10-22');
+F.recordCreditPurchase(previous,{cardId:'nubank',description:'Já cadastrada',category:'Outros',purchaseDate:'2026-10-22',amount:20,items:[],installments:[{date:'2026-11-01',amount:20,installmentNumber:1,installmentCount:1}]});
+const untouched=structuredClone(previous),result=prepareInvoiceImport(previous,plan);
+assert.deepEqual(previous,untouched,'Preview never changes the source document');
+assert.equal(result.created,3);assert.equal(result.changed,true);
+assert.equal(F.currentBalance(result.data,'2026-10-22'),1000,'Invoice import creates no cash debit');
+for(const row of plan.invoices){const bill=result.data.finance.bills.find(b=>b.sourceId==='card:'+row.cardId&&b.month===row.month);assert.equal(bill.expectedAmount,row.amount);assert.equal(bill.dueDate,row.dueDate)}
+assert.equal(result.data.finance.creditPurchases.find(p=>p.id==='opening-invoice:nubank:2026-11').amount,80.01,'Existing purchases are included in the supplied total, not counted twice');
+assert.deepEqual(result.data.transactions,previous.transactions);assert.deepEqual(result.data.clients,previous.clients);
+assert.ok(F.validateFinanceChange(previous,result.data));
+let repeated=prepareInvoiceImport(result.data,plan);assert.equal(repeated.created,0);assert.equal(repeated.alreadyImported,3);assert.equal(repeated.changed,false);
+F.recordCreditPurchase(result.data,{cardId:'nubank',description:'Nova compra',category:'Outros',purchaseDate:'2026-10-22',amount:10,items:[],installments:[{date:'2026-11-01',amount:10,installmentNumber:1,installmentCount:1}]});
+assert.equal(result.data.finance.bills.find(b=>b.sourceId==='card:nubank'&&b.month==='2026-11').expectedAmount,110.01);
+const rule=result.data.finance.recurringBills.find(r=>r.cardId==='nubank');F.saveRecurring(result.data,{...rule,dueDay:8});
+repeated=prepareInvoiceImport(result.data,plan);assert.equal(repeated.changed,false,'Replaying import preserves later purchases and configuration');
+const changedPlan=structuredClone(plan);changedPlan.invoices[0].amount=200;
+assert.throws(()=>prepareInvoiceImport(result.data,changedPlan),/outro valor/);
+const legacy=structuredClone(previous);legacy.transactions.push({id:'old',type:'expense',description:'Antiga',date:'2026-11-01',amount:10,paymentMethod:'credit'});
+assert.throws(()=>prepareInvoiceImport(legacy,plan),/sem identificação/);
+const closed=structuredClone(previous);F.payBill(closed,'recurring:card:nubank:2026-11',{amount:20,date:'2026-11-07',method:'pix'});
+assert.throws(()=>prepareInvoiceImport(closed,plan),/paga ou cancelada/);
+const small=structuredClone(plan);small.invoices[0].amount=1;
+assert.throws(()=>prepareInvoiceImport(previous,small),/superam/);
+const same={username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2026-11',amount:20,dueDate:'2026-11-07'}]};
+const zero=prepareInvoiceImport(previous,same);assert.equal(zero.data.finance.creditPurchases.length,previous.finance.creditPurchases.length);assert.equal(prepareInvoiceImport(zero.data,same).changed,false,'An invoice already covered by purchases still receives a replay marker');
+for(const mutate of [p=>p.username='raquel',p=>p.invoices.push(p.invoices[0]),p=>p.invoices[0].dueDate='2026-02-30',p=>p.invoices[0].amount=0,p=>p.invoices[0].month='2026-10']){const invalid=structuredClone(plan);mutate(invalid);assert.throws(()=>normalizeInvoicePlan(invalid))}
+console.log('OK: private invoice plan, exact totals/due dates, known purchases, no cash change, replay safety and conflict protection.');

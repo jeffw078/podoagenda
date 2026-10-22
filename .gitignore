@@ -7,3 +7,4 @@ node_modules/
 .schema-validation/
 .account-setup.local.json
 .browser-check/
+.card-invoices*.local.json
