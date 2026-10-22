@@ -11,6 +11,7 @@ const auth = script.slice(script.indexOf('let registered='), script.lastIndexOf(
 function fixture() {
   const elements = new Map();
   const element = id => {
+    if(['podoPick','personalPick','authPodoPick','authPersonalPick'].includes(id))return null;
     if (!elements.has(id)) {
       const classes = new Set();
       elements.set(id, {value:'',type:'password',textContent:'',disabled:false,attributes:{},classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c),toggle(c,on){if(on)classes.add(c);else classes.delete(c)}},setAttribute(name,value){this.attributes[name]=value},focus(){}});
@@ -48,7 +49,7 @@ assert.equal(first.calls.at(-1).payload.profile, 'podo');
 assert.equal(first.calls.at(-1).payload.setupCode, 'activation-test');
 first.run('chooseProfile("personal")');
 assert.equal(first.element('setupCode').value, '');
-assert.equal(first.element('authPersonalPick').attributes['aria-pressed'], 'true');
+assert.equal(first.element('authUsername').value, 'jefferson');
 first.run('toggleAuthPassword()');
 assert.equal(first.element('authPassword').type, 'text');
 first.run('chooseProfile("podo")');
@@ -91,7 +92,7 @@ temporary.run('showPasswordChange({profile:"podo",username:"raquel",mustChangePa
 assert.equal(temporary.element('authAction').textContent,'Salvar nova senha e entrar');
 assert.equal(temporary.element('setupCode').disabled,true);
 assert.equal(temporary.element('authPasswordConfirm').required,true);
-assert.equal(temporary.element('authPersonalPick').disabled,true);
+assert.equal(temporary.element('authUsername').readOnly,true);
 temporary.element('authPassword').value='SenhaNova123!';
 temporary.element('authPasswordConfirm').value='Diferente123!';
 await temporary.run('authSubmit()');
@@ -105,4 +106,37 @@ await temporary.run('lockApp()');
 temporary.run('chooseProfile("personal")');
 assert.equal(temporary.element('authUsername').value,'jefferson');
 assert.equal(temporary.element('authPassword').disabled,false);
+
+const shortLogin=fixture();
+shortLogin.setResponse({registered:['podo'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'}]});
+await shortLogin.run('initAuth()');
+shortLogin.element('authPassword').value='Abc123!?';
+await shortLogin.run('authSubmit()');
+assert.equal(shortLogin.calls.at(-1).action,'login','An existing password shorter than the new-password policy must reach login');
+assert.equal(shortLogin.element('authPassword').minLength,1);
+shortLogin.run('showPasswordChange({profile:"podo",username:"raquel",mustChangePassword:true})');
+assert.equal(shortLogin.element('authPassword').minLength,10);
+shortLogin.element('authPassword').value='Abc123!?';
+shortLogin.element('authPasswordConfirm').value='Abc123!?';
+const beforeShortChange=shortLogin.calls.length;
+await shortLogin.run('authSubmit()');
+assert.equal(shortLogin.calls.length,beforeShortChange,'Changing a password still requires at least 10 characters');
+const shortRegistration=fixture();
+await shortRegistration.run('initAuth()');
+assert.equal(shortRegistration.element('authPassword').minLength,10);
+shortRegistration.element('authPassword').value='Abc123!?';
+shortRegistration.element('authPasswordConfirm').value='Abc123!?';
+shortRegistration.element('setupCode').value='activation-test';
+await shortRegistration.run('authSubmit()');
+assert.equal(shortRegistration.calls.some(call=>call.action==='register'),false);
+
+const usernameOnly=fixture();
+usernameOnly.setResponse({registered:['podo','personal'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'},{profile:'personal',username:'jefferson'}]});
+await usernameOnly.run('initAuth()');
+usernameOnly.element('authUsername').value=' JEFFERSON ';
+usernameOnly.element('authPassword').value='ExampleLogin123!';
+await usernameOnly.run('authSubmit()');
+assert.equal(usernameOnly.calls.at(-1).action,'login');
+assert.equal(usernameOnly.calls.at(-1).payload.profile,'personal','Username chooses its own profile without profile buttons');
+assert.equal(usernameOnly.calls.at(-1).payload.username,'jefferson');
 console.log('OK: autenticação, recuperação da API, usuários nomeados e troca obrigatória da senha temporária.');

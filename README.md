@@ -1,6 +1,6 @@
 # Meu Studio — Neon (versão para Vercel)
 
-Dois perfis com login separado: Podologia e Pessoal. O navegador usa API do Vercel; os dados ficam no PostgreSQL do Neon. Sem `DATABASE_URL` o app não consegue funcionar. O OCR com Tesseract.js depende de carregar a biblioteca e os modelos pela internet.
+Dois usuários com acesso por nome e senha: Raquel entra no consultório e Jefferson no controle pessoal. O navegador usa a API da Vercel; os dados ficam no PostgreSQL do Neon. Sem `DATABASE_URL` o app não consegue funcionar. O painel conjunto e a edição das configurações dos dois ambientes são exclusivos do Jefferson.
 
 ## Publicar
 
@@ -8,8 +8,8 @@ Dois perfis com login separado: Podologia e Pessoal. O navegador usa API do Verc
 2. Envie os arquivos desta pasta a um repositório GitHub e conecte-o à Vercel (Framework: Other, diretório raiz: esta pasta).
 3. Configure na Vercel em Settings > Environment Variables: `DATABASE_URL` = string PostgreSQL **pooler** do Neon; `SETUP_CODE` = código de criação de contas, aleatório e forte.
 4. Faça deploy. Abra a URL HTTPS. Primeiro crie o perfil Podologia e depois o Pessoal com senhas distintas e `SETUP_CODE`; depois ambos acessam apenas com suas senhas. O código de configuração nunca deve aparecer em `index.html` nem ser commitado.
-5. Na versão antiga, exporte os dois arquivos JSON separadamente. Entre em cada perfil novo e use **Importar JSON** para recuperar o conteúdo correspondente. Importar substitui todos os dados do perfil selecionado.
-6. Remova `SETUP_CODE` do ambiente após criar ambas as contas e faça um novo deploy. Mantenha os backups do Neon e exportações periódicas.
+5. Os documentos atuais permanecem no banco. A versão nova inicializa o bloco financeiro ao entrar, preservando agenda, clientes e movimentações existentes. Migrações externas devem ser feitas pelo responsável pelo banco; não há importação ou exportação JSON na interface.
+6. Remova `SETUP_CODE` do ambiente após criar ambas as contas e faça um novo deploy. Mantenha os backups do Neon.
 
 ## Inicializar o Neon
 
@@ -42,6 +42,18 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 
 ## O que está implementado
 
+- Controle pessoal do Jefferson com saudação, saldo disponível, contas pendentes, gastos, reserva e movimentações mensais. A navegação dá acesso a Despesas, Reserva e Configurações. Não há botões de troca de perfil ou Bloquear; o botão **Sair** fica no cabeçalho dos dois ambientes e também há saída em Configurações.
+- Despesas com guias **Contas** (vencimentos e pagamentos) e **Gastos** (compras avulsas e parcelas). Contas recorrentes podem ser fixas ou variáveis, com previsão opcional nas variáveis. O pagamento registra o valor efetivo, preserva o previsto e gera apenas uma movimentação. Contas pagas não podem ter seu pagamento excluído isoladamente.
+- Reserva mensal por valor fixo ou percentual da **renda prevista do mês**, informada no mesmo planejamento. A meta gera uma conta a pagar. O pagamento reduz o disponível e aparece separado dos gastos de consumo. Defina cada mês na guia Reserva ou em Configurações; editar a meta não reescreve pagamentos anteriores.
+- Cadastro do saldo atual com data. Os lançamentos já registrados até essa data formam a base inicial; depois disso as movimentações atualizam o disponível. Corrigir exige motivo e gera um histórico com valor anterior, novo valor, diferença e data. O servidor rejeita alterações no ponto inicial ou em correções anteriores.
+- Dashboard amplo para computador em **Jefferson → Configurações → Abrir dashboard**, com visão financeira dos dois ambientes e configurações de saldo, planejamento/reserva, recorrências e, no consultório, serviços e horários. A API verifica a identidade do Jefferson e a revisão de cada perfil antes de gravar. Os dados de clientes, agenda e transações do outro ambiente são preservados.
+- OCR de cupom e as operações de importar/exportar JSON foram removidos.
+
+- Ícone de agenda e dinheiro para o app salvo no celular: `manifest.json`, ícones PNG de 192 e 512 pixels, versão para iPhone de 180 pixels e favicon. O nome do atalho é **PodoAgenda**, com abertura em modo independente. Depois de publicar os arquivos, adicione o site à tela inicial pelo navegador; atalhos antigos podem precisar ser removidos e adicionados novamente para atualizar o ícone. Não inclui acesso offline: os dados continuam dependendo da API e do banco.
+
+- Agenda do dia com cards para cada intervalo livre, antes, entre e depois dos atendimentos, respeitando o expediente e o almoço. Clicar em **Adicionar atendimento** preenche data e início; as sugestões mostram até três serviços que cabem no intervalo, usando as durações do catálogo. Clicar em uma sugestão também seleciona o serviço.
+- Compromissos pessoais na mesma agenda pelo botão **+ Pessoal** ou pelo tipo do agendamento: título e duração, sem cliente, serviços ou pagamento. Podem ocorrer fora do expediente e durante o almoço, sem sobrepor outros compromissos. Os registros são preservados no banco; registros antigos continuam sendo atendimentos.
+
 - Histórico de atendimentos dentro do cadastro de cada cliente, com data, serviços, duração, valor, status e relato. A conclusão abre um campo livre para descrever o que foi feito; o relato também pode ser incluído ou editado depois. Serviços são registrados com os nomes e valores da conclusão para preservar o histórico quando o catálogo mudar. O pagamento continua sendo registrado separadamente.
 
 - Despesas com escolha obrigatória de débito, dinheiro ou crédito nos dois perfis. No crédito, é possível definir o número de parcelas (até 120) e o mês da primeira fatura, inclusive o mês seguinte quando o cartão já fechou. A prévia mostra os valores por mês; a divisão preserva os centavos do total, sem duplicar a compra nos relatórios.
@@ -52,21 +64,22 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 - Visual sóbrio em verde dólar, com superfícies neutras e menos elementos decorativos.
 - Primeiro acesso sem senha padrão: cada perfil cria sua senha, confirma e usa o código de ativação definido pelo administrador em `SETUP_CODE`. Nos próximos acessos, basta a senha do perfil.
 - Se a API estiver indisponível, a tela informa a falha e permite tentar novamente; ela não oferece criar uma conta sem conseguir verificar os perfis existentes.
-- `npm test` verifica a sintaxe do JavaScript e os fluxos de autenticação, confirmação de senha, falta de ativação e recuperação após falha de conexão, sem acessar o banco.
+- `npm test` verifica autenticação, agenda, histórico, parcelas, núcleo financeiro, interface e permissões do dashboard usando PostgreSQL local em memória (PGlite). Não acessa o banco de produção. `npm run test:browser` exercita os formulários e navegação em Chrome/Edge headless com uma API local de teste e salva capturas em `.browser-check/`, ignorada pelo Git. Use `BROWSER_PATH` se o navegador não estiver em um caminho conhecido.
 
-- Duas contas independentes e isoladas pela sessão autenticada no servidor.
+- Duas contas isoladas pela sessão autenticada; a exceção é o painel administrativo autorizado do Jefferson.
 - Financeiro nos dois espaços: entradas, despesas com linhas detalhadas, categorias e agrupamento por mês; gráficos por categoria.
 - Podologia: clientes, serviços, agenda, bloqueio de almoço de pelo menos 60 minutos e encaixes.
-- OCR via Tesseract.js no navegador, com revisão manual obrigatória antes de salvar.
 - Sessão HttpOnly, Secure e SameSite=Lax. Senhas com `scrypt` e salt único. Bloqueio temporário após oito senhas incorretas. Proteção de edição simultânea por revisão; conflitos geram alerta para recarregar.
-- Exportação e importação JSON.
 
 ## Limites desta entrega
+
+- Os lembretes automáticos por WhatsApp ainda não estão implementados. O botão existente apenas abre uma conversa para envio manual. A proposta é usar a API oficial do WhatsApp Business e uma rotina no servidor para lembretes de 24 horas e 1 hora antes, com autorização da cliente, modelos aprovados, verificação de cancelamentos/reagendamentos e registro dos envios para evitar duplicidade. A rotina deve usar `America/Sao_Paulo`, ignorar compromissos pessoais e funcionar com o navegador fechado. O [cron do plano Hobby da Vercel](https://vercel.com/docs/cron-jobs/usage-and-pricing) só executa uma vez por dia e sem precisão de minuto; seria necessário um agendador externo ou um plano com execução frequente. A ativação também depende do número conectado à API, das credenciais e dos modelos aprovados pela Meta. Consulte a [política oficial de mensagens](https://business.whatsapp.com/policy?lang=pt_BR).
 
 - Esta entrega é **código para deploy**, não um deploy concluído nem migração dos dados anteriores. É necessário instalar no projeto oficial e configurar Neon.
 - A gravação salva um documento JSON por perfil no PostgreSQL, não tabelas independentes de transações e atendimentos. Adequado a um uso pequeno, mas sem sincronização ao vivo: alterações simultâneas em vários aparelhos podem gerar conflito e exigir recarga.
 - Não inclui login por digital/passkey; isso exigirá WebAuthn completo e política de recuperação.
-- Não inclui armazenamento de fotos no Neon nem anexos persistentes. OCR lê a imagem, mas só salva os itens digitados/reconhecidos.
+- Não inclui armazenamento de fotos ou anexos persistentes.
+- O saldo disponível é o valor cadastrado atualizado pelos lançamentos; não existe conexão automática com banco ou cartão. Contas sem valor previsto são sinalizadas e não entram na estimativa numérica até o valor ser conhecido. As parcelas antigas mantêm a contabilização no mês de cada fatura.
 - Configure na Vercel e Neon backup automático, limite de gastos, monitoração e autenticação adicional caso evolua para uso amplo.
 
 ## Segurança

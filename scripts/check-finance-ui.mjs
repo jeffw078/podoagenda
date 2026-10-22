@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+
+// A DOM boundary double keeps the financial model real. These checks catch
+// missing model writes, duplicate payments, misleading amounts, and lost audit.
+const nodes = new Map();
+const node = id => {
+  if (!nodes.has(id)) nodes.set(id, { value: '', innerHTML: '', textContent: '', checked: false, focus() {} });
+  return nodes.get(id);
+};
+let saves = 0;
+let modalHtml = '';
+const alerts = [];
+const context = vm.createContext({
+  console, Date, Intl, Math, JSON, Number, String, Boolean,
+  crypto: { randomUUID: (() => { let n = 0; return () => `test-${++n}`; })() },
+  db: { transactions: [], services: [], clients: [], appointments: [], settings: {} },
+  profile: 'personal', dateToday: '2026-10-22', $: node,
+  esc: value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+  money: value => `R$ ${Number(value || 0).toFixed(2)}`,
+  uid: () => 'ui-id', expenseCategories: ['Moradia', 'Outros'],
+  persist() { saves++; }, renderAll() {}, closeModal() {},
+  modal(title, html) { modalHtml = html; },
+  alert(message) { alerts.push(message); }, confirm: () => true,
+  renderSpendingForm: () => '<div id="purchase-entry">Itens da compra</div>',
+  showSpendingFields() { node('spendingMounted').checked = true; },
+});
+const uiPath = new URL('../finance-ui.js', import.meta.url);
+if (fs.existsSync(uiPath)) vm.runInContext(fs.readFileSync(uiPath, 'utf8'), context);
+assert.equal(typeof context.renderPersonalFinance, 'function', 'personal financial dashboard must be available');
+vm.runInContext(fs.readFileSync(new URL('../finance-core.js', import.meta.url), 'utf8'), context);
+const core = context.FinanceCore;
+core.ensure(context.db);
+core.setCurrentBalance(context.db, 1000, '2026-10-22');
+const bill = core.createBill(context.db, { month: '2026-10', dueDate: '2026-10-25', description: '<Aluguel>', category: 'Moradia', expectedAmount: 300 });
+const unknown = core.createBill(context.db, { month: '2026-10', dueDate: '2026-10-26', description: 'Água', category: 'Moradia', expectedAmount: null });
+node('personalMonth').value = '2026-10';
+context.renderPersonalFinance();
+assert.match(node('personalFinanceContent').innerHTML, /R\$ 1000\.00/, 'available balance uses the opening balance');
+assert.match(node('personalFinanceContent').innerHTML, /&lt;Aluguel&gt;/, 'bill descriptions are escaped');
+assert.match(node('personalFinanceContent').innerHTML, /[Ss]em previs|[Aa] definir/, 'unknown estimates remain visible');
+assert.doesNotMatch(node('personalFinanceContent').innerHTML, />\s*<Aluguel>/);
+context.openFinanceExpenses('spending');
+assert.match(modalHtml, /Contas/);
+assert.match(modalHtml, /Gastos/);
+assert.match(modalHtml, /purchase-entry/);
+assert.equal(node('spendingMounted').checked, true);
+
+context.financeOpenPayment(bill.id);
+node('financePayAmount').value = '325.40';
+node('financePayDate').value = '2026-10-22';
+node('financePayMethod').value = 'debit';
+context.financeSavePayment(bill.id);
+assert.equal(bill.expectedAmount, 300, 'payment preserves the estimate');
+assert.equal(bill.paidAmount, 325.4);
+assert.equal(context.db.transactions.length, 1);
+const afterPayment = saves;
+context.financeSavePayment(bill.id);
+assert.equal(context.db.transactions.length, 1, 'a repeated UI submission cannot duplicate a payment');
+assert.equal(saves, afterPayment, 'failed mutation is not persisted');
+assert.ok(alerts.length);
+
+context.financeOpenBalance();
+node('financeBalanceAmount').value = '800';
+node('financeBalanceDate').value = '2026-10-22';
+node('financeBalanceReason').value = '';
+context.financeSaveBalance();
+assert.equal(context.db.finance.adjustments.length, 0, 'correction requires a reason');
+node('financeBalanceReason').value = 'Conferência do extrato';
+context.financeSaveBalance();
+assert.equal(context.db.finance.adjustments.length, 1);
+assert.equal(core.currentBalance(context.db, '2026-10-22'), 800);
+context.renderFinanceSettings();
+assert.match(node('financeSettingsContent').innerHTML, /Conferência do extrato/);
+assert.doesNotMatch(node('financeSettingsContent').innerHTML, /deleteAdjustment|Excluir ajuste/);
+
+context.financeOpenPayment(unknown.id);
+assert.match(modalHtml, /[Ss]em previs|[Aa] definir/, 'unknown bill payment asks for an actual amount');
+core.setMonthPlan(context.db, '2026-10', { expectedIncome: 5000, reserveMode: 'percentage', reserveValue: 10, reserveDueDay: 31 });
+node('reserveMonth').value = '2026-10';
+context.renderReservePage();
+assert.match(node('reserveContent').innerHTML, /R\$ 500\.00/, 'reserve view displays the percentage target');
+node('financePlanIncome_reserve').value = '6000';
+node('financePlanMode_reserve').value = 'percentage';
+node('financePlanValue_reserve').value = '15';
+node('financePlanDue_reserve').value = '12';
+context.financeSavePlan('2026-10', 'reserve');
+assert.equal(context.db.finance.monthlyPlans.find(plan => plan.month === '2026-10').expectedIncome, 6000, 'reserve editor reads its own fields even when settings are also mounted');
+assert.equal(context.db.finance.bills.find(item => item.source === 'reserve').expectedAmount, 900);
+node('personalMonth').value = '2026-11';
+context.renderPersonalFinance();
+assert.doesNotMatch(node('personalFinanceContent').innerHTML, /&lt;Aluguel&gt;/, 'changing the selected month changes the bills shown');
+context.openFinanceExpenses('bills');
+assert.match(modalHtml, /value="2026-11"/, 'opening bills follows the dashboard month');
+node('financeBillsMonth').value = '2026-10';
+context.financeChangeBillsMonth();
+assert.match(modalHtml, /&lt;Aluguel&gt;/, 'month selection inside the bills modal is preserved');
+context.openFinanceExpenses('bills');
+assert.match(modalHtml, /value="2026-11"/, 'a later dashboard opening resets the modal to its selected month');
+console.log('Finance UI behavior checks passed.');

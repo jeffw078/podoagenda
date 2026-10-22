@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
-const source=html.slice(html.indexOf('function planExpensePayments('),html.indexOf('let ocrWorker='));
+const source=html.slice(html.indexOf('function planExpensePayments('),html.indexOf('function renderPersonal('))+'\n'+html.slice(html.indexOf('function deleteTransaction('),html.indexOf('function totals('));
 const elements=new Map(),alerts=[];
 const element=id=>{
  if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',disabled:false,required:false,classList:{toggle(){}},focus(){}});
@@ -49,4 +49,10 @@ assert.equal('installmentGroupId' in db.transactions[3],false);
 element('ePaymentMethod').value='cash';context.saveExpense();assert.equal(db.transactions[4].method,'Dinheiro');
 element('ePaymentMethod').value='';context.saveExpense();assert.equal(db.transactions.length,5);assert.equal(alerts.length,1);
 element('eFirstMonth').value='2026-11';element('eDate').value='2026-12-10';context.syncExpensePurchaseDate();assert.equal(element('eFirstMonth').value,'2026-12');
+db.transactions.push({id:'linked-payment',type:'expense',billId:'bill-paid',description:'Conta paga',amount:5,date:'2026-10-20'});
+context.confirm=()=>true;
+const beforeLinkedDelete=saved;
+context.deleteTransaction('linked-payment');
+assert.equal(db.transactions.some(t=>t.id==='linked-payment'),true,'Paid bill transaction remains attached to its financial history');
+assert.equal(saved,beforeLinkedDelete);
 console.log('OK: pagamento obrigatório, débito, dinheiro, crédito, centavos exatos, virada de ano e totais mensais sem duplicação.');
