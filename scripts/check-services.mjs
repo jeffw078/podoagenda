@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+const html=await readFile(new URL('../app.js',import.meta.url),'utf8');
 const services=[{id:'used',name:'Serviço com histórico',duration:60,price:100},{id:'free',name:'Serviço sem uso',duration:30,price:50}];
 const db={services,appointments:[{id:'past',serviceIds:['used'],date:'2020-01-01',status:'concluido'}]};
 const before=structuredClone(db.appointments),nodes=new Map();let saves=0,confirm=true;

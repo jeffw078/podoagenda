@@ -4,6 +4,7 @@ import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
 import { schemaAwareSql } from '../lib/database-schema.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
+import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis } from '../lib/access-control.js';
 import '../finance-core.js';
 
 let connectionUrl, database;
@@ -20,7 +21,7 @@ function tokenFrom(req){const cookies=(req.headers.cookie||'').split(';').map(x=
 const tokenHash=t=>createHash('sha256').update(t).digest('hex');
 async function logged(req){const token=tokenFrom(req);if(!/^[a-f0-9]{64}$/.test(token))return null;const rows=await sql`SELECT u.id,u.profile,u.username,u.password_change_required,u.password_hash,u.password_salt,u.data,u.revision,s.token_hash FROM studio_sessions s JOIN studio_accounts u ON u.id=s.account_id WHERE s.token_hash=${tokenHash(token)} AND s.expires_at>NOW()`;return rows[0]||null}
 const profileName=x=>x==='podo'?'podo':x==='personal'?'personal':null;
-function validateData(data){if(!data||typeof data!=='object'||Array.isArray(data))return false;const arrays=['services','clients','appointments','transactions'];if(arrays.some(k=>!Array.isArray(data[k])||data[k].length>25000))return false;if(!data.settings||typeof data.settings!=='object')return false;if(data.appointments.some(a=>!a||typeof a!=='object'))return false;const personalIds=new Set(data.appointments.filter(a=>a.type==='personal').map(a=>a.id));for(const tr of data.transactions){if(!tr||!['income','expense'].includes(tr.type)||typeof tr.description!=='string'||tr.description.length>500||!/^\d{4}-\d{2}-\d{2}$/.test(tr.date)||!Number.isFinite(tr.amount)||tr.amount<0||tr.amount>100000000||tr.type==='income'&&personalIds.has(tr.appointmentId))return false}for(const appointment of data.appointments){if(appointment.treatmentNotes!==undefined&&(typeof appointment.treatmentNotes!=='string'||appointment.treatmentNotes.length>10000))return false;if(appointment.type==='personal'){if(typeof appointment.title!=='string'||!appointment.title.trim()||appointment.title.length>120||appointment.price!==0||appointment.clientId!==null||!Array.isArray(appointment.serviceIds)||appointment.serviceIds.length||!Number.isInteger(appointment.duration)||appointment.duration<5||appointment.duration>1440||!/^\d{4}-\d{2}-\d{2}$/.test(appointment.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(appointment.time)||!['agendado','concluido','cancelado'].includes(appointment.status))return false;const [hour,minute]=appointment.time.split(':').map(Number);if(hour*60+minute+appointment.duration>1440)return false}}return data.finance===undefined||globalThis.FinanceCore.validateFinance(data)}
+function validateData(data){if(!data||typeof data!=='object'||Array.isArray(data))return false;const arrays=['services','clients','appointments','transactions'];if(arrays.some(k=>!Array.isArray(data[k])||data[k].length>25000))return false;if(!data.settings||typeof data.settings!=='object')return false;if(data.appointments.some(a=>!a||typeof a!=='object'))return false;if(data.clients.some(client=>!objectValue(client)||client.anamnesis!==undefined&&!validAnamnesis(client.anamnesis)))return false;const personalIds=new Set(data.appointments.filter(a=>a.type==='personal').map(a=>a.id));for(const tr of data.transactions){if(!tr||!['income','expense'].includes(tr.type)||typeof tr.description!=='string'||tr.description.length>500||!/^\d{4}-\d{2}-\d{2}$/.test(tr.date)||!Number.isFinite(tr.amount)||tr.amount<0||tr.amount>100000000||tr.type==='income'&&personalIds.has(tr.appointmentId))return false}for(const appointment of data.appointments){if(appointment.treatmentNotes!==undefined&&(typeof appointment.treatmentNotes!=='string'||appointment.treatmentNotes.length>10000))return false;if(appointment.type==='personal'){if(typeof appointment.title!=='string'||!appointment.title.trim()||appointment.title.length>120||appointment.price!==0||appointment.clientId!==null||!Array.isArray(appointment.serviceIds)||appointment.serviceIds.length||!Number.isInteger(appointment.duration)||appointment.duration<5||appointment.duration>1440||!/^\d{4}-\d{2}-\d{2}$/.test(appointment.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(appointment.time)||!['agendado','concluido','cancelado'].includes(appointment.status))return false;const [hour,minute]=appointment.time.split(':').map(Number);if(hour*60+minute+appointment.duration>1440)return false}}return data.finance===undefined||globalThis.FinanceCore.validateFinance(data)}
 const validFinanceChange=(previous,next)=>(previous.finance===undefined&&next.finance===undefined)||globalThis.FinanceCore.validateFinanceChange(previous,next);
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 function validSchedule(data){
@@ -43,7 +44,7 @@ export default async function handler(req,res){
   if(!req.headers.origin||new URL(req.headers.origin).host!==req.headers.host)return send(res,403,{error:'Origem inválida'});
   const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
   const {action}=body;
-  if(action==='status'){const profiles=await sql`SELECT profile,username FROM studio_accounts`;return send(res,200,{registered:[...new Set(profiles.map(x=>x.profile))],accounts:profiles,setupAvailable:Boolean(process.env.SETUP_CODE)})}
+  if(action==='status'){const rows=await sql`SELECT EXISTS(SELECT 1 FROM studio_accounts) AS registered`;return send(res,200,{registered:rows[0].registered,setupAvailable:Boolean(process.env.SETUP_CODE)})}
   if(action==='provision'){
    const accounts=verifyProvisioning(body);
    if(!accounts)return send(res,403,{error:'Autorização de criação inválida ou expirada'});
@@ -97,11 +98,12 @@ export default async function handler(req,res){
    if(user.username!=='jefferson'||user.profile!=='personal')return send(res,403,{error:'Acesso restrito ao administrador.'});
    if(action==='adminOverview'){
     const accounts=await sql`SELECT profile,username,data,revision FROM studio_accounts WHERE (profile='personal' AND username='jefferson') OR (profile='podo' AND username='raquel') ORDER BY profile`;
-    return send(res,200,{accounts});
+    return send(res,200,{accounts:accounts.map(adminAccountView)});
    }
    const targetProfile=profileName(body.targetProfile);
    if(!targetProfile||!Number.isInteger(body.revision)||!['settings','finance','services'].some(key=>body[key]!==undefined))return send(res,400,{error:'Dados inválidos'});
    const targetUsername=targetProfile==='personal'?'jefferson':'raquel';
+   if(targetProfile==='personal'&&(body.settings!==undefined||body.services!==undefined))return send(res,403,{error:'Configurações clínicas indisponíveis para este perfil.'});
    const targets=await sql`SELECT id,data,revision FROM studio_accounts WHERE profile=${targetProfile} AND username=${targetUsername}`;
    if(!targets.length)return send(res,404,{error:'Perfil não encontrado.'});
    const target=targets[0];
@@ -122,10 +124,11 @@ export default async function handler(req,res){
    if(Buffer.byteLength(JSON.stringify(data))>2_000_000)return send(res,413,{error:'Arquivo muito grande'});
    const rows=await sql`UPDATE studio_accounts SET data=${JSON.stringify(data)}::jsonb,revision=revision+1,updated_at=NOW() WHERE id=${target.id} AND revision=${body.revision} RETURNING data,revision`;
    if(!rows.length)return send(res,409,{error:'Dados atualizados em outro aparelho. Recarregue a página antes de salvar.'});
-   return send(res,200,rows[0]);
+   return send(res,200,adminAccountView({...rows[0],profile:targetProfile,username:targetUsername}));
   }
   if(action==='save'){
-   const data=body.data,revision=body.revision;
+   if(user.profile!=='podo'&&hasClinicalWrite(body))return send(res,403,{error:'Este perfil não possui acesso aos dados clínicos.'});
+   const data=user.profile==='podo'?body.data:mergeFinancialData(user.data,body.data),revision=body.revision;
    if(!validateData(data)||!Number.isInteger(revision))return send(res,400,{error:'Dados inválidos'});
    if(revision!==user.revision)return send(res,409,{error:'Dados atualizados em outro aparelho. Recarregue a página antes de salvar.'});
    if(!validFinanceChange(user.data,data))return send(res,400,{error:'Dados financeiros inválidos ou histórico alterado.'});

@@ -7,6 +7,7 @@ import { schemaAwareSql } from '../lib/database-schema.js';
 import { readDatabaseUrl, databaseFailure } from '../lib/database-errors.js';
 import { hashPassword, passMatches, accountView } from '../lib/passwords.js';
 import { verifyProvisioning } from '../lib/account-provisioning.js';
+import { hasClinicalWrite, mergeFinancialData, adminAccountView, validAnamnesis, financialView } from '../lib/access-control.js';
 import '../finance-core.js';
 import {prepareInvoiceImport} from '../lib/card-invoice-import.js';
 
@@ -28,7 +29,7 @@ try {
     catch(error){await db.exec('ROLLBACK');throw error;}
   };
   const {publicKey,privateKey}=generateKeyPairSync('ed25519');
-  const deps={neon:()=>sql,randomBytes,createHash,readDatabaseUrl,databaseFailure,schemaAwareSql,hashPassword,passMatches,accountView,verifyProvisioning:body=>verifyProvisioning(body,Date.now(),publicKey)};
+  const deps={neon:()=>sql,randomBytes,createHash,readDatabaseUrl,databaseFailure,schemaAwareSql,hashPassword,passMatches,accountView,hasClinicalWrite,mergeFinancialData,adminAccountView,validAnamnesis,verifyProvisioning:body=>verifyProvisioning(body,Date.now(),publicKey)};
   const source=(await readFile(new URL('../api/index.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace('export default async function handler','async function handler');
   const factory=vm.runInNewContext('(function(deps){const {'+Object.keys(deps).join(',')+'}=deps;\n'+source+'\nreturn handler;})',{FinanceCore:globalThis.FinanceCore,crypto:webcrypto,Buffer,URL,process:{env:{DATABASE_URL:'postgresql://test:test@db.example/test',SETUP_CODE:'Example-Setup-Only!'}},console});
   const handler=factory(deps);
@@ -38,10 +39,16 @@ try {
     await handler({method:'POST',headers:{host:'podoagenda.example',origin:'https://podoagenda.example',...(cookie?{cookie}:{})},body},res);
     return {status:res.statusCode,body:result,cookie:headers['Set-Cookie']?.split(';')[0]};
   };
-  assert.equal((await request({action:'status'})).status,200);
+  assert.deepEqual((await request({action:'status'})).body,{registered:true,setupAvailable:true});
   const old=(await db.query("SELECT password_hash,data FROM studio_accounts WHERE profile='podo'")).rows[0];
   assert.equal(old.password_hash,'old-hash');assert.equal(old.data.preserved,true);
   await db.query("DELETE FROM studio_accounts WHERE profile='podo'");
+
+  assert.deepEqual((await request({action:'status'})).body,{registered:false,setupAvailable:true});
+  const bootstrap=await request({action:'register',profile:'personal',password:'Bootstrap-Example-Only!',setupCode:'Example-Setup-Only!'});
+  assert.equal(bootstrap.status,200);assert.deepEqual(bootstrap.body.data,{transactions:[]});
+  assert.deepEqual(bootstrap.body.capabilities,{finance:true,clinic:false,admin:true});
+  await db.query('DELETE FROM studio_accounts');
 
   const accounts=[{profile:'podo',username:'raquel',password:'Raquel-Example-Temporary'},{profile:'personal',username:'jefferson',password:'Jefferson-Example-Temporary'}].map(a=>({...a,salt:randomBytes(16).toString('hex')}));
   const payload=JSON.stringify({expiresAt:Date.now()+60000,accounts:accounts.map(({password,...a})=>({...a,hash:hashPassword(password,a.salt)}))});
@@ -50,18 +57,20 @@ try {
   assert.equal((await request(body)).status,201);
   assert.equal((await request(body)).status,409);
   const status=await request({action:'status'});
-  assert.equal(status.body.accounts.length,2);
+  assert.deepEqual(status.body,{registered:true,setupAvailable:true});
   const reviewerPassword='Reviewer-Example-Only!',reviewerSalt=randomBytes(16).toString('hex');
-  const reviewerData={services:[],clients:[],appointments:[],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
+  const reviewerData={services:[{id:'hidden-service',name:'Legacy service',duration:60,price:20}],clients:[{id:'hidden-client',name:'Legacy clinical name',anamnesis:{diabetes:'type1',hypertension:true,circulationProblems:false,anticoagulants:false,allergies:'Private clinical history'}}],appointments:[],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
   await db.query("INSERT INTO studio_accounts(profile,username,password_salt,password_hash,password_change_required,data) VALUES('personal','filla',$1,$2,FALSE,$3::jsonb)",[reviewerSalt,hashPassword(reviewerPassword,reviewerSalt),JSON.stringify(reviewerData)]);
   const reviewerLogin=await request({action:'login',username:'filla',profile:'personal',password:reviewerPassword});
   assert.equal(reviewerLogin.status,200,'A second personal account logs in by its username');
   assert.equal(reviewerLogin.body.username,'filla');assert.equal(reviewerLogin.body.mustChangePassword,false);
   const reviewerCookie=reviewerLogin.cookie;
+  assert.deepEqual(reviewerLogin.body.data,{transactions:[]});
+  assert.deepEqual(reviewerLogin.body.capabilities,{finance:true,clinic:false,admin:false});
   assert.equal((await request({action:'login',username:'filla',password:reviewerPassword})).status,200);
   assert.equal((await request({action:'login',username:'filla',profile:'podo',password:reviewerPassword})).status,401);
   const multipleStatus=(await request({action:'status'})).body;
-  assert.equal(multipleStatus.accounts.length,3);assert.equal(multipleStatus.registered.length,2);
+  assert.deepEqual(multipleStatus,{registered:true,setupAvailable:true});
   assert.equal((await request({action:'register',profile:'personal',password:'Example-New-Password!',setupCode:'Example-Setup-Only!'})).status,409,'Bootstrap registration cannot create another personal account after setup');
   assert.equal((await request({action:'login',username:'filla',profile:'personal',password:'Wrong-Example-Only!'})).status,401);
   assert.equal((await db.query("SELECT login_failures FROM studio_accounts WHERE username='jefferson'")).rows[0].login_failures,0,'Failed tester login does not lock out Jefferson');
@@ -83,12 +92,28 @@ try {
     const changed=await request({action:'changePassword',password:permanent},login.cookie);
     assert.equal(changed.status,200);assert.equal(changed.body.mustChangePassword,false);assert.equal(changed.body.profile,account.profile);
     assert.ok(changed.body.data);assert.notEqual(changed.cookie,login.cookie);
+    if(account.profile==='personal')assert.deepEqual(changed.body.data,{transactions:[]});
+    assert.deepEqual(changed.body.capabilities,{finance:true,clinic:account.profile==='podo',admin:account.username==='jefferson'});
     assert.equal((await request({action:'me'},login.cookie)).status,401);
     assert.equal((await request({action:'login',profile:account.profile,username:account.username,password:account.password})).status,401);
     const reentry=await request({action:'login',profile:account.profile,username:account.username,password:permanent});
     assert.equal(reentry.status,200);assert.equal(reentry.body.mustChangePassword,false);
     const wrongProfile=account.profile==='podo'?'personal':'podo';
     assert.equal((await request({action:'login',profile:wrongProfile,username:account.username,password:permanent})).status,401);
+    if(account.profile==='personal'){
+      assert.deepEqual(reentry.body.data,{transactions:[]});
+      const before=(await db.query("SELECT data,revision FROM studio_accounts WHERE username='jefferson'")).rows[0];
+      for(const key of ['clients','services','appointments','settings']){
+        for(const payload of [{...reentry.body.data,[key]:key==='settings'?{}:[]},reentry.body.data]){
+          const forbidden=await request({action:'save',revision:reentry.body.revision,data:payload,...(payload===reentry.body.data?{[key]:key==='settings'?{}:[]}: {})},reentry.cookie);
+          assert.equal(forbidden.status,403,'Personal writes cannot include '+key+' even as empty values');
+        }
+      }
+      const forged=await request({action:'save',revision:reentry.body.revision,data:{...reentry.body.data,clients:[]},profile:'podo',username:'raquel'},reentry.cookie);
+      assert.equal(forged.status,403,'Client-supplied profile cannot confer clinical privileges');
+      assert.deepEqual((await db.query("SELECT data,revision FROM studio_accounts WHERE username='jefferson'")).rows[0],before);
+      continue;
+    }
     const appointment={id:'history-test',clientId:'client-test',serviceIds:['service-test'],date:'2026-10-21',time:'09:00',duration:60,price:130,status:'concluido',treatmentNotes:'Procedimento realizado.\nOrientações de teste.',completedAt:'2026-10-21T12:00:00.000Z',serviceSnapshot:[{id:'service-test',name:'Podologia completa',duration:60,price:130}]};
     const personal={id:'personal-test',type:'personal',title:'Academia',date:'2026-10-22',time:'07:00',duration:60,price:0,status:'agendado',clientId:null,serviceIds:[]};
     const data={...reentry.body.data,appointments:[appointment,personal]};
@@ -116,16 +141,24 @@ try {
   const overview=await request({action:'adminOverview'},jefferson.cookie);
   assert.equal(overview.status,200);assert.equal(overview.body.accounts.length,2);
   assert.deepEqual(overview.body.accounts.map(a=>a.username).sort(),['jefferson','raquel']);
-  for(const item of overview.body.accounts)assert.deepEqual(Object.keys(item).sort(),['data','profile','revision','username']);
+  for(const item of overview.body.accounts){
+    assert.deepEqual(Object.keys(item).sort(),['appointmentCounts','configuration','data','profile','revision','username']);
+    assert.deepEqual(Object.keys(item.data).sort(),['transactions']);
+    assert.equal('clients' in item.data,false);assert.equal('appointments' in item.data,false);
+  }
   const podo=overview.body.accounts.find(account=>account.profile==='podo');
   const personalBefore=(await request({action:'me'},jefferson.cookie)).body;
   const settings={start:'08:00',end:'17:00',lunch:'12:00',lunchDuration:60};
   const settingsSaved=await request({action:'adminSaveSettings',targetProfile:'podo',revision:podo.revision,settings,clients:[],appointments:[],transactions:[],username:'intruder'},jefferson.cookie);
   assert.equal(settingsSaved.status,200);assert.equal(settingsSaved.body.revision,podo.revision+1);
-  assert.deepEqual(settingsSaved.body.data.settings,settings);
-  for(const key of ['clients','appointments','transactions','services'])assert.deepEqual(settingsSaved.body.data[key],podo.data[key]);
+  assert.deepEqual(settingsSaved.body.configuration.clinicSchedule,settings);
+  assert.deepEqual(settingsSaved.body.data.transactions,podo.data.transactions);
+  assert.deepEqual(settingsSaved.body.configuration.serviceCatalog,podo.configuration.serviceCatalog);
+  assert.equal('clients' in settingsSaved.body.data,false);assert.equal('appointments' in settingsSaved.body.data,false);
   const podoRestored=(await request({action:'me'},raquel.cookie)).body;
-  assert.deepEqual(podoRestored.data,settingsSaved.body.data);assert.equal(podoRestored.username,'raquel');
+  assert.deepEqual(financialView(podoRestored.data),settingsSaved.body.data);assert.equal(podoRestored.username,'raquel');
+  assert.deepEqual(podoRestored.data.settings,settings);assert.equal(podoRestored.data.appointments.length,2);
+  assert.deepEqual(podo.appointmentCounts,{'2026-10':2});
   assert.deepEqual((await request({action:'me'},jefferson.cookie)).body,personalBefore);
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'podo',revision:podo.revision,settings},jefferson.cookie)).status,409);
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'wrong',revision:0,settings},jefferson.cookie)).status,400);
@@ -137,11 +170,20 @@ try {
   // Services referenced by appointments cannot disappear through the admin editor.
   const financeData=structuredClone(podoRestored.data);
   financeData.services.push({id:'service-test',name:'Serviço histórico',duration:60,price:130});
-  financeData.clients.push({id:'client-test',name:'Cliente preservada'});
+  const clinicalAnamnesis={diabetes:'type2',hypertension:true,circulationProblems:false,anticoagulants:true,allergies:'Alergia informada pela cliente'};
+  financeData.clients.push({id:'client-test',name:'Cliente preservada',anamnesis:clinicalAnamnesis});
+  for(const anamnesis of [{...clinicalAnamnesis,diabetes:'yes'},{...clinicalAnamnesis,hypertension:'true'},{...clinicalAnamnesis,circulationProblems:1},{...clinicalAnamnesis,anticoagulants:null},{...clinicalAnamnesis,allergies:'a'.repeat(2001)},{...clinicalAnamnesis,allergies:[]},{...clinicalAnamnesis,extra:'unauthorized'},null]){
+    const invalid=structuredClone(financeData);invalid.clients[0].anamnesis=anamnesis;
+    assert.equal((await request({action:'save',revision:podoRestored.revision,data:invalid},raquel.cookie)).status,400,'Anamnesis types and enum are server-validated');
+  }
   financeData.transactions.push({id:'expense-preserved',type:'expense',description:'Gasto existente',date:'2026-10-21',amount:12});
   globalThis.FinanceCore.setCurrentBalance(financeData,1000,'2026-10-22');
   const openingSaved=await request({action:'save',revision:podoRestored.revision,data:financeData},raquel.cookie);
   assert.equal(openingSaved.status,200);
+  assert.deepEqual((await request({action:'me'},raquel.cookie)).body.data.clients[0].anamnesis,clinicalAnamnesis);
+  const confidentialOverview=(await request({action:'adminOverview'},jefferson.cookie)).body;
+  assert.equal(JSON.stringify(confidentialOverview).includes('Alergia informada'),false,'Clinical records never enter the admin overview');
+  assert.equal(JSON.stringify(confidentialOverview).includes('Cliente preservada'),false);
   assert.equal((await request({action:'adminSaveSettings',targetProfile:'podo',revision:openingSaved.body.revision,services:financeData.services.filter(s=>s.id!=='service-test')},jefferson.cookie)).status,400);
   const badFinance=structuredClone(financeData);badFinance.finance.version=99;
   assert.equal((await request({action:'save',revision:openingSaved.body.revision,data:badFinance},raquel.cookie)).status,400);
@@ -166,8 +208,9 @@ try {
   const editedServices=corrected.services.map(s=>s.id==='service-test'?{...s,price:145}:s);
   const adminFinanceSaved=await request({action:'adminSaveSettings',targetProfile:'podo',revision:correctionSaved.body.revision,finance:adminFinance.finance,services:editedServices},jefferson.cookie);
   assert.equal(adminFinanceSaved.status,200);assert.equal(adminFinanceSaved.body.revision,correctionSaved.body.revision+1);
-  for(const key of ['clients','appointments','transactions'])assert.deepEqual(adminFinanceSaved.body.data[key],corrected[key]);
-  assert.equal(adminFinanceSaved.body.data.services.find(s=>s.id==='service-test').price,145);
+  assert.deepEqual(adminFinanceSaved.body.data.transactions,corrected.transactions);
+  assert.equal('clients' in adminFinanceSaved.body.data,false);assert.equal('appointments' in adminFinanceSaved.body.data,false);
+  assert.equal(adminFinanceSaved.body.configuration.serviceCatalog.find(s=>s.id==='service-test').price,145);
   assert.equal(adminFinanceSaved.body.data.finance.monthlyPlans[0].expectedIncome,3000);
   assert.equal(adminFinanceSaved.body.data.finance.openingBalance.amount,1000);
   assert.equal(adminFinanceSaved.body.data.finance.adjustments[0].reason,'Correção do saldo informado');
@@ -215,13 +258,14 @@ try {
   assert.equal(adminCreditSaved.body.data.finance.creditPurchases[0].amount,98.01);
   assert.deepEqual(adminCreditSaved.body.data.transactions,beforeAdminCredit.data.transactions,'Admin installment adjustments preserve cash transactions');
   assert.deepEqual(adminCreditSaved.body.data.finance.bills.find(b=>b.status==='paid'),beforeAdminCredit.data.finance.bills.find(b=>b.status==='paid'));
-  const editedAudit=structuredClone(adminCreditSaved.body.data);editedAudit.finance.creditEdits[0].reason='Motivo alterado';
+  const editedAudit=structuredClone((await request({action:'me'},raquel.cookie)).body.data);editedAudit.finance.creditEdits[0].reason='Motivo alterado';
   assert.equal((await request({action:'save',revision:adminCreditSaved.body.revision,data:editedAudit},raquel.cookie)).status,400);
-  const archivedServices=adminCreditSaved.body.data.services.map(service=>service.id==='service-test'?{...service,archived:true}:service);
+  const archivedServices=adminCreditSaved.body.configuration.serviceCatalog.map(service=>service.id==='service-test'?{...service,archived:true}:service);
   const archivedSaved=await request({action:'adminSaveSettings',targetProfile:'podo',revision:adminCreditSaved.body.revision,services:archivedServices},jefferson.cookie);
   assert.equal(archivedSaved.status,200,'Used services can be removed from the active catalog');
-  assert.deepEqual(archivedSaved.body.data.appointments,adminCreditSaved.body.data.appointments);
-  assert.equal(archivedSaved.body.data.services.find(service=>service.id==='service-test').archived,true);
+  assert.equal('appointments' in archivedSaved.body.data,false);
+  assert.deepEqual((await request({action:'me'},raquel.cookie)).body.data.appointments,beforeAdminCredit.data.appointments);
+  assert.equal(archivedSaved.body.configuration.serviceCatalog.find(service=>service.id==='service-test').archived,true);
   assert.deepEqual((await request({action:'me'},jefferson.cookie)).body.data,cardDocuments[1],'Admin edits to Raquel preserve Jefferson records');
   const personalInvoices=(await request({action:'me'},jefferson.cookie)).body;
   const invoiceImport=prepareInvoiceImport(personalInvoices.data,{username:'jefferson',capturedDate:'2026-10-22',invoices:[{cardId:'nubank',month:'2099-01',amount:50.01,dueDate:'2099-01-07'},{cardId:'mercado_pago',month:'2099-01',amount:25,dueDate:'2099-01-17'}]});
@@ -234,20 +278,26 @@ try {
   console.log('OK PostgreSQL: assisted card invoice import and idempotent roundtrip, preserving cash transactions.');
   const ownersBefore=await db.query("SELECT username,data,revision FROM studio_accounts WHERE username IN ('jefferson','raquel') ORDER BY username");
   const reviewerState=(await request({action:'me'},reviewerCookie)).body;
-  assert.deepEqual(reviewerState.data,reviewerData,'A tester never inherits owner records');
+  assert.deepEqual(reviewerState.data,financialView(reviewerData),'A tester never receives clinical data');
   const reviewerEdit=structuredClone(reviewerState.data);
   globalThis.FinanceCore.ensureCreditCards(reviewerEdit,'2026-10');
   globalThis.FinanceCore.setCurrentBalance(reviewerEdit,75,'2026-10-22');
   assert.equal((await request({action:'save',revision:reviewerState.revision,data:reviewerEdit,profile:'personal',username:'jefferson'},reviewerCookie)).status,200,'Extra body fields cannot redirect writes to Jefferson');
   assert.equal((await request({action:'me'},reviewerCookie)).body.data.finance.openingBalance.amount,75);
+  const storedReviewer=(await db.query("SELECT data FROM studio_accounts WHERE username='filla'")).rows[0].data;
+  for(const key of ['clients','services','appointments','settings'])assert.deepEqual(storedReviewer[key],reviewerData[key],'Financial saves preserve hidden '+key);
+  assert.equal((await request({action:'save',revision:reviewerState.revision+1,data:{transactions:[],unexpected:[]}},reviewerCookie)).status,400,'Personal saves accept only financial document keys');
   assert.deepEqual((await db.query("SELECT username,data,revision FROM studio_accounts WHERE username IN ('jefferson','raquel') ORDER BY username")).rows,ownersBefore.rows);
   const personalAdminBefore=(await request({action:'me'},jefferson.cookie)).body;
-  const adminPersonal=await request({action:'adminSaveSettings',targetProfile:'personal',revision:personalAdminBefore.revision,settings:personalAdminBefore.data.settings},jefferson.cookie);
+  assert.equal((await request({action:'adminSaveSettings',targetProfile:'personal',revision:personalAdminBefore.revision,settings:{}},jefferson.cookie)).status,403);
+  const adminPersonal=await request({action:'adminSaveSettings',targetProfile:'personal',revision:personalAdminBefore.revision,finance:personalAdminBefore.data.finance},jefferson.cookie);
   assert.equal(adminPersonal.status,200);
   assert.equal((await request({action:'me'},reviewerCookie)).body.data.finance.openingBalance.amount,75,'Admin personal settings resolve Jefferson rather than another personal account');
   assert.equal((await request({action:'logout'},reviewerCookie)).status,200);
   assert.equal((await request({action:'me'},reviewerCookie)).status,401);
   console.log('OK PostgreSQL: multiple personal accounts, username login, owner/tester isolation and Jefferson-only dashboard.');
+  console.log('OK PostgreSQL: anonymous status without enumeration, session capabilities, financial response projection, forbidden clinical writes and preserved hidden records.');
+  console.log('OK PostgreSQL: clinical anamnesis validation and admin projections without client records or treatment notes.');
   console.log('OK PostgreSQL: admin future installments, immutable paid history/audit and service catalog deletion with historical preservation.');
   console.log('OK PostgreSQL: independent Nubank/Mercado Pago purchases, exact installments, roundtrip, rejected tampering and single invoice payment.');
   console.log('OK PostgreSQL: username login, admin permissions, target isolation, original records and optimistic revisions.');

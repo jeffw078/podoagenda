@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {validAnamnesis} from '../lib/access-control.js';
+const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 import { test } from 'node:test';
 
-const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+const html=await readFile(new URL('../app.js',import.meta.url),'utf8');
 const source=[
   html.slice(html.indexOf('function field('),html.indexOf('function openService(')),
   html.slice(html.indexOf('function openClient('),html.indexOf('const categories=')),
@@ -23,7 +25,7 @@ function fixture(){
   element('agendaDate').value='2026-10-22';
   const db={clients:[{id:'c1',name:'Ana',phone:'47999999999'}],services:[{id:'hands',name:'Duas mãos',duration:60,price:90},{id:'short',name:'Cuidado rápido',duration:30,price:40},{id:'long',name:'Sessão longa',duration:120,price:180}],appointments:[{id:'a1',clientId:'c1',serviceIds:['hands'],date:'2026-10-22',time:'09:00',duration:60,price:90,status:'agendado'}],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
   let selected=['hands'];
-  const context=vm.createContext({db,$:element,uid:()=>`new-${++sequence}`,persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),confirm:()=>true,modal:(title,body)=>{opened={title,body}},document:{querySelectorAll:()=>selected.map(value=>({value}))},dateToday:'2026-10-22',esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),durationLabel:n=>n+' min',money:n=>'R$ '+n.toFixed(2),mins:time=>{const [h,m]=time.split(':').map(Number);return h*60+m},tstr:n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`,readableDate:value=>value});
+  const context=vm.createContext({clinicFeatures:null,requireClinic:()=>true,db,$:element,uid:()=>`new-${++sequence}`,persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),confirm:()=>true,modal:(title,body)=>{opened={title,body}},document:{querySelectorAll:()=>selected.map(value=>({value}))},dateToday:'2026-10-22',esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),durationLabel:n=>n+' min',money:n=>'R$ '+n.toFixed(2),mins:time=>{const [h,m]=time.split(':').map(Number);return h*60+m},tstr:n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`,readableDate:value=>value});
   vm.runInContext(source,context);
   // Keep rendering under test callable, while save actions only persist their data.
   context.renderAll=()=>{};
@@ -145,7 +147,7 @@ test('working hours remain editable with personal commitments outside work or du
 
 test('API accepts personal commitments but rejects personal prices and linked income',async()=>{
   const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
-  const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData');
+  const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue});
   const f=fixture();
   const personal={id:'p1',type:'personal',title:'Academia',date:'2026-10-22',time:'07:00',duration:60,status:'agendado',price:0,clientId:null,serviceIds:[]};
   f.db.appointments.push(personal);assert.equal(validate(f.db),true);

@@ -9,9 +9,9 @@ function fixture(){
  const elements=new Map(),calls=[],alerts=[];
  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',disabled:false,classList:{add(){},remove(){},toggle(){}},querySelectorAll(){return []}});return elements.get(id)};
  element('dashboardMonth').value='2026-10';
- const data={settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60},services:[],clients:[],appointments:[],transactions:[]};
- const accounts=[{profile:'podo',username:'raquel',revision:2,data:clone(data)},{profile:'personal',username:'jefferson',revision:5,data:clone(data)}];
- const context=vm.createContext({console,structuredClone,crypto:globalThis.crypto,$:element,FinanceCore:null,unlocked:true,currentUsername:'raquel',profile:'podo',db:clone(data),revision:2,saveFailed:false,saveChain:Promise.resolve(),dateToday:'2026-10-22',uid:()=>crypto.randomUUID(),esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),money:value=>'R$ '+Number(value).toFixed(2),modal(){},closeModal(){},renderAll(){},navigate:id=>calls.push({navigate:id}),alert:message=>alerts.push(message),document:{body:element('body'),querySelectorAll:()=>[...elements.values()]},api:async(action,payload)=>{calls.push({action,payload});if(action==='adminOverview')return{accounts:clone(accounts)};const target=accounts.find(a=>a.profile===payload.targetProfile);target.data={...target.data,...('finance'in payload?{finance:payload.finance}:{}),...('settings'in payload?{settings:payload.settings}:{})};target.revision++;return{data:clone(target.data),revision:target.revision}}});
+ const data={transactions:[]},schedule={start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60};
+ const accounts=[{profile:'podo',username:'raquel',revision:2,data:clone(data),configuration:{clinicSchedule:clone(schedule),serviceCatalog:[]},appointmentCounts:{'2026-10':3}},{profile:'personal',username:'jefferson',revision:5,data:clone(data),configuration:{clinicSchedule:null,serviceCatalog:[]},appointmentCounts:{}}];
+ const context=vm.createContext({console,structuredClone,crypto:globalThis.crypto,$:element,FinanceCore:null,capabilities:{finance:true,clinic:false,admin:true},unlocked:true,currentUsername:'raquel',profile:'podo',db:clone(data),revision:2,saveFailed:false,saveChain:Promise.resolve(),dateToday:'2026-10-22',uid:()=>crypto.randomUUID(),esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),money:value=>'R$ '+Number(value).toFixed(2),modal(){},closeModal(){},renderAll(){},navigate:id=>calls.push({navigate:id}),alert:message=>alerts.push(message),document:{body:element('body'),querySelectorAll:()=>[...elements.values()]},api:async(action,payload)=>{calls.push({action,payload});if(action==='adminOverview')return{accounts:clone(accounts)};const target=accounts.find(a=>a.profile===payload.targetProfile);target.data={...target.data,...('finance'in payload?{finance:payload.finance}:{})};if('settings'in payload)target.configuration.clinicSchedule=clone(payload.settings);if('services'in payload)target.configuration.serviceCatalog=clone(payload.services);target.revision++;return clone(target)}});
  vm.runInContext(core,context);vm.runInContext(source,context);
  return{context,element,calls,alerts,accounts};
 }
@@ -22,12 +22,17 @@ await restricted.context.openManagementDashboard();
 assert.equal(restricted.calls.some(call=>call.action==='adminOverview'),false);
 assert.ok(restricted.alerts.length);
 
+const noCapability=fixture();noCapability.context.profile='personal';noCapability.context.currentUsername='jefferson';noCapability.context.capabilities.admin=false;
+await noCapability.context.openManagementDashboard();assert.equal(noCapability.calls.some(call=>call.action==='adminOverview'),false,'Username alone cannot enable the admin UI');
+
 const admin=fixture();admin.context.profile='personal';admin.context.currentUsername='jefferson';
 admin.context.FinanceCore.saveRecurring(admin.accounts[0].data,{description:'Internet futura',category:'Internet',fixed:true,expectedAmount:100,dueDay:10,startMonth:'2026-10',endMonth:null,active:true});
 await admin.context.openManagementDashboard();
 assert.ok(admin.calls.some(call=>call.action==='adminOverview'));
 assert.match(admin.element('dashboardContent').innerHTML,/Raquel/);
 assert.match(admin.element('dashboardContent').innerHTML,/Jefferson/);
+assert.match(admin.element('dashboardContent').innerHTML,/3 compromisso\(s\)/,'Admin sees a count without receiving appointment records');
+for(const account of admin.accounts)for(const key of ['clients','services','appointments','settings'])assert.equal(key in account.data,false);
 admin.element('dashboardMonth').value='2026-11';admin.context.renderManagementDashboard();
 assert.match(admin.element('dashboardContent').innerHTML,/Vencimento 10\/11\/2026/,'Future month shows generated recurring bills even if its owner has not opened it');
 admin.element('dashboardMonth').value='2026-10';admin.context.renderManagementDashboard();
@@ -38,6 +43,8 @@ assert.ok(save);assert.equal(save.payload.targetProfile,'podo');assert.equal(sav
 assert.equal(save.payload.finance.openingBalance.amount,500);
 assert.equal(save.payload.finance.monthlyPlans[0].reserveValue,10);
 assert.equal('transactions'in save.payload,false);assert.equal('clients'in save.payload,false);
+assert.deepEqual(clone(admin.context.dashboardAccount('podo').configuration.clinicSchedule),clone(save.payload.settings),'Projected save response replaces clinic configuration');
+assert.deepEqual(clone(admin.context.dashboardAccount('podo').appointmentCounts),{'2026-10':3});
 assert.equal(admin.context.profile,'personal','Saving another environment never switches the current user');
 assert.equal(admin.context.db.finance,undefined,'Saving Raquel settings does not replace Jefferson data');
 const count=admin.calls.filter(call=>call.action==='adminSaveSettings').length;
@@ -90,11 +97,14 @@ assert.equal(typeof cardEditor.context.dashboardOpenCreditEdit,'undefined','Admi
 let cardForm='';cardEditor.context.modal=(title,html)=>cardForm=html;cardEditor.context.dashboardOpenRecurring('podo',cardIndex);
 assert.doesNotMatch(cardForm,/dashRuleAmount|dashRuleType|Valor base adicional/,'Admin card settings do not offer a manual amount');
 const serviceEditor=fixture();serviceEditor.context.profile='personal';serviceEditor.context.currentUsername='jefferson';serviceEditor.context.confirm=()=>true;
-serviceEditor.accounts[0].data.services=[{id:'historic-service',name:'Histórico',duration:60,price:100}];
-serviceEditor.accounts[0].data.appointments=[{id:'old',serviceIds:['historic-service']}];
+serviceEditor.accounts[0].configuration.serviceCatalog=[{id:'historic-service',name:'Histórico',duration:60,price:100}];
+// No appointment records are available to decide deletion: catalog entries are archived.
+assert.equal('appointments' in serviceEditor.accounts[0].data,false);
 await serviceEditor.context.openManagementDashboard();
 await serviceEditor.context.dashboardDeleteService(0);
 const deletedService=serviceEditor.calls.filter(call=>call.action==='adminSaveSettings').at(-1);
-assert.equal(deletedService.payload.services[0].archived,true,'Admin removes a historical service from the catalog without deleting its identity');
+assert.equal(deletedService.payload.services[0].archived,true,'Admin archives services without consulting or fetching appointment records');
+assert.equal(serviceEditor.context.dashboardAccount('podo').configuration.serviceCatalog[0].archived,true,'The projected save refreshes the cached service catalog');
 assert.doesNotMatch(serviceEditor.element('dashboardContent').innerHTML,/dashboardOpenService\(0\)/,'Archived service is hidden from the dashboard catalog');
+console.log('OK: projected admin records contain no clients/appointments; counts and authorized configuration remain usable.');
 console.log('OK: painel restrito, duas visões, configuração de outro ambiente e motivo de correção obrigatório.');

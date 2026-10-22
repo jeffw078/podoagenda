@@ -1,164 +1,82 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
-const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
-const script = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]).join('\n');
-new vm.Script(script);
-assert.ok(script.lastIndexOf('initAuth();') > script.indexOf('let registered='), 'Authentication state must initialize before startup');
-const auth = script.slice(script.indexOf('let registered='), script.lastIndexOf('renderAll();initAuth();'));
-
-function fixture() {
-  const elements = new Map();
-  const element = id => {
-    if(['podoPick','personalPick','authPodoPick','authPersonalPick'].includes(id))return null;
-    if (!elements.has(id)) {
-      const classes = new Set();
-      elements.set(id, {value:'',type:'password',textContent:'',disabled:false,attributes:{},classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),contains:c=>classes.has(c),toggle(c,on){if(on)classes.add(c);else classes.delete(c)}},setAttribute(name,value){this.attributes[name]=value},focus(){}});
-    }
-    return elements.get(id);
-  };
-  const calls = [];
-  let response = {registered:[],setupAvailable:true};
-  let fail = false;
-  const context = vm.createContext({$:element,profile:'podo',unlocked:false,closeModal(){},document:{body:element('body')},console,saveChain:Promise.resolve(),initial:()=>({}),db:{},revision:0,saveFailed:false,api:async(action,payload)=>{calls.push({action,payload});if(fail)throw Error('Erro interno no servidor');if(action==='status')return response;if(action==='me')throw Error('Sem sessão');if(action==='logout')return {ok:true};return {profile:payload.profile}},Promise});
-  vm.runInContext(auth, context);
-  vm.runInContext('startSession=result=>{globalThis.session=result}', context);
-  return {element,calls,run:code=>vm.runInContext(code,context),setResponse:value=>{response=value},setFail:value=>{fail=value}};
+const [html,source]=await Promise.all(['index.html','app.js'].map(path=>readFile(new URL('../'+path,import.meta.url),'utf8')));
+assert.match(html,/<script\b[^>]*type="module"[^>]*src="\/app\.bundle\.js/);
+assert.equal([...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].some(match=>match[1].trim()),false,'application logic must not be inline');
+assert.doesNotMatch(source,/(?:window|globalThis)\.(?:profile|db|unlocked|openAppointment|openClient)\s*=/);
+const start=source.indexOf('let registered='),end=source.indexOf('function openPersonalAppointment()');
+assert.ok(start>0&&end>start,'auth module source boundaries must exist');
+const auth=source.slice(start,end);new vm.Script(auth);
+const persistSource=source.slice(source.indexOf('const persist='),source.indexOf('const $='));
+assert.ok(persistSource.includes('sessionEpoch'),'persistence must bind writes to the session');
+const clone=value=>JSON.parse(JSON.stringify(value));
+const account=(username='filla',profile='personal',caps={finance:true,clinic:false,admin:false})=>({username,profile,capabilities:caps,data:profile==='personal'?{transactions:[]}:{transactions:[],clients:[],appointments:[],services:[],settings:{}},revision:4});
+function fixture(){
+ const elements=new Map(),calls=[],mounts=[],alerts=[];
+ const element=id=>{
+  if(!elements.has(id)){
+   const classes=new Set();
+   elements.set(id,{value:'',type:'password',textContent:'',disabled:false,attributes:{},innerHTML:'',replaceChildren(){this.innerHTML=''},classList:{add:(...items)=>items.forEach(item=>classes.add(item)),remove:(...items)=>items.forEach(item=>classes.delete(item)),contains:item=>classes.has(item),toggle(item,on){if(on??!classes.has(item))classes.add(item);else classes.delete(item)}},setAttribute(key,value){this.attributes[key]=value},focus(){}});
+  }return elements.get(id);
+ };
+ let status={registered:true,setupAvailable:false},me=Object.assign(Error('Sem sessão'),{status:401}),reply=account(),mount=async()=>true,apiHook=null;
+ const failures=new Map();
+ const context=vm.createContext({$:element,profile:null,unlocked:false,currentUsername:'',capabilities:{finance:false,clinic:false,admin:false},sessionEpoch:0,sessionClosing:false,clinicFeatures:null,managementBusy:false,db:{transactions:[]},revision:0,saveFailed:false,saveChain:Promise.resolve(),initial:()=>({transactions:[]}),document:{body:element('body')},closeModal(){},clearManagementDashboard(){},initializeViewDates(){},renderNavigation(){},navigate:id=>context.lastPage=id,alert:message=>alerts.push(message),confirm:()=>true,Promise,api:async(action,payload)=>{
+  calls.push({action,payload});if(failures.has(action))throw failures.get(action);if(apiHook&&(action==='save'||action==='logout'))return apiHook(action,payload);if(action==='status')return status;if(action==='me'){if(me instanceof Error)throw me;return me}if(action==='logout')return{ok:true};return reply;
+ }});
+ vm.runInContext(auth+'\n'+persistSource,context);context.testMount=async epoch=>{mounts.push({epoch,profile:context.profile,capabilities:clone(context.capabilities)});return mount(epoch)};vm.runInContext('mountAuthorizedViews=testMount',context);
+ return{element,calls,mounts,alerts,context,run:code=>vm.runInContext(code,context),state:()=>clone({profile:context.profile,unlocked:context.unlocked,username:context.currentUsername,capabilities:context.capabilities,data:context.db,revision:context.revision}),setStatus:value=>status=value,setMe:value=>me=value,setReply:value=>reply=value,setMount:value=>mount=value,setApiHook:value=>apiHook=value,fail:(action,error)=>failures.set(action,error),recover:action=>failures.delete(action),credentials(username,password){element('authUsername').value=username;element('authPassword').value=password}};
 }
+const existing=fixture();await existing.run('initAuth()');
+assert.equal(existing.element('authUsername').value,'','status must not prefill or enumerate accounts');assert.equal(existing.element('authAction').textContent,'Entrar');assert.equal(existing.element('authPassword').minLength,1);assert.equal(existing.element('authPassword').autocomplete,'current-password');assert.equal(existing.element('setupBox').classList.contains('hidden'),true);
+existing.credentials(' FILLA ','Abc123!?');await existing.run('authSubmit()');
+assert.deepEqual(clone(existing.calls.at(-1)),{action:'login',payload:{username:'filla',password:'Abc123!?'}},'login identifies the account on the server without a guessed profile');assert.equal(existing.state().unlocked,true);assert.equal(existing.state().username,'filla');assert.equal(existing.context.lastPage,'pessoal');assert.equal(existing.element('authPassword').value,'');assert.equal(existing.mounts[0].capabilities.clinic,false);assert.equal(existing.element('headerGreeting').textContent,'Olá, Filla');
 
-const first = fixture();
-await first.run('initAuth()');
-assert.equal(first.element('authAction').textContent, 'Criar senha e acessar');
-assert.equal(first.element('authPassword').autocomplete, 'new-password');
-assert.equal(first.element('confirmBox').classList.contains('hidden'), false);
-first.element('authPassword').value = 'SenhaTeste123';
-first.element('authPasswordConfirm').value = 'OutraSenha123';
-first.element('setupCode').value = 'activation-test';
-await first.run('authSubmit()');
-assert.equal(first.calls.some(c=>c.action==='register'), false);
-assert.match(first.element('authFeedback').textContent, /não coincidem/);
-first.element('authPasswordConfirm').value = 'SenhaTeste123';
-first.element('setupCode').value = '';
-await first.run('authSubmit()');
-assert.equal(first.calls.some(c=>c.action==='register'), false);
-first.element('setupCode').value = 'activation-test';
-await first.run('authSubmit()');
-assert.equal(first.calls.at(-1).action, 'register');
-assert.equal(first.calls.at(-1).payload.profile, 'podo');
-assert.equal(first.calls.at(-1).payload.setupCode, 'activation-test');
-first.run('chooseProfile("personal")');
-assert.equal(first.element('setupCode').value, '');
-assert.equal(first.element('authUsername').value, 'jefferson');
-first.run('toggleAuthPassword()');
-assert.equal(first.element('authPassword').type, 'text');
-first.run('chooseProfile("podo")');
-assert.equal(first.element('authPassword').type, 'password');
+const initial=fixture();initial.setStatus({registered:false,setupAvailable:true});initial.setReply(account('raquel','podo',{finance:true,clinic:true,admin:false}));await initial.run('initAuth()');
+assert.equal(initial.element('authAction').textContent,'Criar acesso inicial');assert.equal(initial.element('authPassword').minLength,10);assert.equal(initial.element('authPassword').autocomplete,'new-password');assert.equal(initial.element('confirmBox').classList.contains('hidden'),false);
+initial.credentials('raquel','SenhaTeste123');initial.element('authPasswordConfirm').value='OutraSenha123';initial.element('setupCode').value='activation-test';await initial.run('authSubmit()');assert.equal(initial.calls.some(call=>call.action==='register'),false);
+initial.element('authPasswordConfirm').value='SenhaTeste123';initial.element('setupCode').value='';await initial.run('authSubmit()');assert.equal(initial.calls.some(call=>call.action==='register'),false);
+initial.element('setupCode').value='activation-test';await initial.run('authSubmit()');assert.deepEqual(clone(initial.calls.at(-1)),{action:'register',payload:{profile:'podo',password:'SenhaTeste123',setupCode:'activation-test'}});assert.equal(initial.state().capabilities.clinic,true);assert.equal(initial.context.lastPage,'home');assert.equal(initial.element('setupCode').value,'');
+const invalidInitial=fixture();invalidInitial.setStatus({registered:false,setupAvailable:true});await invalidInitial.run('initAuth()');invalidInitial.credentials('friend','SenhaTeste123');invalidInitial.element('authPasswordConfirm').value='SenhaTeste123';invalidInitial.element('setupCode').value='activation-test';await invalidInitial.run('authSubmit()');assert.equal(invalidInitial.calls.some(call=>call.action==='register'),false);
+invalidInitial.credentials('jefferson','Abc123!?');invalidInitial.element('authPasswordConfirm').value='Abc123!?';await invalidInitial.run('authSubmit()');assert.equal(invalidInitial.calls.some(call=>call.action==='register'),false);invalidInitial.run('toggleRegistration()');assert.equal(invalidInitial.element('setupBox').classList.contains('hidden'),true);assert.equal(invalidInitial.element('authPassword').value,'');assert.equal(invalidInitial.element('authAction').textContent,'Entrar');
 
-const existing = fixture();
-existing.setResponse({registered:['podo'],setupAvailable:false});
-await existing.run('initAuth()');
-assert.equal(existing.element('authAction').textContent, 'Entrar');
-assert.equal(existing.element('setupBox').classList.contains('hidden'), true);
-existing.element('authPassword').value = 'SenhaTeste123';
-await existing.run('authSubmit()');
-assert.equal(existing.calls.at(-1).action, 'login');
-assert.equal('setupCode' in existing.calls.at(-1).payload, false);
-existing.run('chooseProfile("personal")');
-assert.equal(existing.element('authAction').disabled, true);
-assert.equal(existing.element('authAction').textContent, 'Aguardando ativação');
+const outage=fixture();outage.fail('status',Error('Erro interno no servidor'));await outage.run('initAuth()');assert.equal(outage.element('authAction').disabled,true);assert.equal(outage.element('authAction').textContent,'Acesso indisponível');assert.equal(outage.element('authRetry').classList.contains('hidden'),false);assert.equal(outage.element('authFeedback').textContent,'Erro interno no servidor');await outage.run('authSubmit()');assert.equal(outage.calls.some(call=>call.action==='login'),false);outage.recover('status');await outage.run('initAuth()');assert.equal(outage.element('authAction').disabled,false);assert.equal(outage.element('authFeedback').textContent,'');
+for(const malformed of [{registered:[],setupAvailable:true},{registered:true,setupAvailable:1},{registered:true}]){const bad=fixture();bad.setStatus(malformed);await bad.run('initAuth()');assert.equal(bad.element('authAction').disabled,true);assert.match(bad.element('authFeedback').textContent,/Resposta inválida/);assert.equal(bad.calls.some(call=>call.action==='me'),false)}
+const meOutage=fixture();meOutage.setMe(Object.assign(Error('Banco indisponível'),{status:503}));await meOutage.run('initAuth()');assert.equal(meOutage.element('authAction').disabled,true);assert.equal(meOutage.element('authFeedback').textContent,'Banco indisponível');
 
-const outage = fixture();
-outage.setFail(true);
-await outage.run('initAuth()');
-assert.equal(outage.element('authAction').disabled, true);
-assert.equal(outage.element('setupBox').classList.contains('hidden'), true);
-assert.equal(outage.element('authRetry').classList.contains('hidden'), false);
-assert.equal(outage.element('authFeedback').textContent, 'Erro interno no servidor');
-assert.equal(outage.element('authAction').textContent, 'Acesso indisponível');
-await outage.run('authSubmit()');
-assert.equal(outage.calls.some(c=>c.action==='register'), false);
-outage.setFail(false);
-await outage.run('initAuth()');
-assert.equal(outage.element('authAction').disabled, false);
-assert.equal(outage.element('authFeedback').textContent, '');
+const temporary=fixture();temporary.setReply({profile:'podo',username:'raquel',mustChangePassword:true});await temporary.run('initAuth()');temporary.credentials('raquel','Temporary123');await temporary.run('authSubmit()');assert.equal(temporary.state().unlocked,false);assert.equal(temporary.mounts.length,0);assert.equal(temporary.element('authAction').textContent,'Salvar nova senha e entrar');assert.equal(temporary.element('authUsername').readOnly,true);assert.equal(temporary.element('authPassword').minLength,10);assert.equal(temporary.element('setupCode').disabled,true);
+temporary.credentials('raquel','Short123');temporary.element('authPasswordConfirm').value='Short123';await temporary.run('authSubmit()');assert.equal(temporary.calls.some(call=>call.action==='changePassword'),false);temporary.credentials('raquel','NewPassword123');temporary.element('authPasswordConfirm').value='Different123';await temporary.run('authSubmit()');assert.equal(temporary.calls.some(call=>call.action==='changePassword'),false);
+temporary.element('authPasswordConfirm').value='NewPassword123';temporary.setReply(account('raquel','podo',{finance:true,clinic:true,admin:false}));await temporary.run('authSubmit()');assert.deepEqual(clone(temporary.calls.at(-1)),{action:'changePassword',payload:{password:'NewPassword123'}});assert.equal(temporary.state().unlocked,true);
+for(const [user,profile,caps,expected]of [
+ ['filla','personal',{finance:true,clinic:true,admin:true},{finance:true,clinic:false,admin:false}],
+ ['jefferson','personal',{finance:true,clinic:false,admin:false},{finance:true,clinic:false,admin:false}],
+ ['jefferson','personal',{finance:true,clinic:false,admin:true},{finance:true,clinic:false,admin:true}],
+ ['raquel','podo',{finance:true,clinic:true,admin:true},{finance:true,clinic:true,admin:false}]
+]){const session=fixture();session.setMe(account(user,profile,caps));await session.run('initAuth()');assert.deepEqual(session.state().capabilities,expected);assert.equal(session.mounts.length,1);assert.equal(session.state().unlocked,true);assert.equal(Object.isFrozen(session.context.capabilities),true)}
+for(const badSession of [{...account(),profile:'admin'},{...account(),data:{}},{...account(),capabilities:{finance:false}},...['clients','services','appointments','settings'].map(key=>({...account(),data:{transactions:[],[key]:[]}}))]){const invalid=fixture();invalid.setMe(badSession);await invalid.run('initAuth()');assert.equal(invalid.state().unlocked,false);assert.equal(invalid.mounts.length,0);assert.equal(invalid.element('authAction').disabled,true)}
 
-const temporary=fixture();
-temporary.setResponse({registered:['podo','personal'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'},{profile:'personal',username:'jefferson'}]});
-await temporary.run('initAuth()');
-assert.equal(temporary.element('authUsername').value,'raquel');
-assert.equal(temporary.element('authPassword').disabled,false);
-temporary.run('showPasswordChange({profile:"podo",username:"raquel",mustChangePassword:true})');
-assert.equal(temporary.element('authAction').textContent,'Salvar nova senha e entrar');
-assert.equal(temporary.element('setupCode').disabled,true);
-assert.equal(temporary.element('authPasswordConfirm').required,true);
-assert.equal(temporary.element('authUsername').readOnly,true);
-temporary.element('authPassword').value='SenhaNova123!';
-temporary.element('authPasswordConfirm').value='Diferente123!';
-await temporary.run('authSubmit()');
-assert.equal(temporary.calls.some(c=>c.action==='changePassword'),false);
-temporary.element('authPasswordConfirm').value='SenhaNova123!';
-await temporary.run('authSubmit()');
-assert.equal(temporary.calls.at(-1).action,'changePassword');
-assert.equal(temporary.calls.at(-1).payload.password,'SenhaNova123!');
-assert.equal('setupCode' in temporary.calls.at(-1).payload,false);
-await temporary.run('lockApp()');
-temporary.run('chooseProfile("personal")');
-assert.equal(temporary.element('authUsername').value,'jefferson');
-assert.equal(temporary.element('authPassword').disabled,false);
+const pending=fixture();let release;pending.setMount(()=>new Promise(resolve=>release=resolve));await pending.run('initAuth()');pending.credentials('filla','Example123');const firstSubmit=pending.run('authSubmit()');await Promise.resolve();await Promise.resolve();await pending.run('authSubmit()');assert.equal(pending.calls.filter(call=>call.action==='login').length,1,'busy auth must not duplicate login');assert.equal(pending.element('authAction').disabled,true);release(true);await firstSubmit;assert.equal(pending.state().unlocked,true);
+pending.run('toggleAuthPassword()');assert.equal(pending.element('authPassword').type,'text');pending.run('clearAuthSecrets()');assert.equal(pending.element('authPassword').type,'password');assert.equal(pending.element('passwordToggle').attributes['aria-pressed'],'false');pending.element('appContent').innerHTML='private account';pending.element('mainNav').innerHTML='private navigation';await pending.run('lockApp()');assert.deepEqual(pending.state(),{profile:null,unlocked:false,username:'',capabilities:{finance:false,clinic:false,admin:false},data:{transactions:[]},revision:0});assert.equal(pending.element('appContent').innerHTML,'');assert.equal(pending.element('mainNav').innerHTML,'');assert.equal(pending.element('authVeil').classList.contains('hidden'),false);assert.equal(pending.element('authUsername').value,'');
+const failedLogout=fixture();failedLogout.setMe(account());await failedLogout.run('initAuth()');failedLogout.fail('logout',Error('Offline'));await failedLogout.run('lockApp()');assert.equal(failedLogout.state().unlocked,true);assert.match(failedLogout.alerts.at(-1),/Offline/);
+assert.equal(failedLogout.context.sessionClosing,false);assert.equal(failedLogout.element('body').classList.contains('session-closing'),false,'failed logout must restore editing');
 
-const shortLogin=fixture();
-shortLogin.setResponse({registered:['podo'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'}]});
-await shortLogin.run('initAuth()');
-shortLogin.element('authPassword').value='Abc123!?';
-await shortLogin.run('authSubmit()');
-assert.equal(shortLogin.calls.at(-1).action,'login','An existing password shorter than the new-password policy must reach login');
-assert.equal(shortLogin.element('authPassword').minLength,1);
-shortLogin.run('showPasswordChange({profile:"podo",username:"raquel",mustChangePassword:true})');
-assert.equal(shortLogin.element('authPassword').minLength,10);
-shortLogin.element('authPassword').value='Abc123!?';
-shortLogin.element('authPasswordConfirm').value='Abc123!?';
-const beforeShortChange=shortLogin.calls.length;
-await shortLogin.run('authSubmit()');
-assert.equal(shortLogin.calls.length,beforeShortChange,'Changing a password still requires at least 10 characters');
-const shortRegistration=fixture();
-await shortRegistration.run('initAuth()');
-assert.equal(shortRegistration.element('authPassword').minLength,10);
-shortRegistration.element('authPassword').value='Abc123!?';
-shortRegistration.element('authPasswordConfirm').value='Abc123!?';
-shortRegistration.element('setupCode').value='activation-test';
-await shortRegistration.run('authSubmit()');
-assert.equal(shortRegistration.calls.some(call=>call.action==='register'),false);
+const deferred=()=>{let resolve,reject;const promise=new Promise((ok,no)=>{resolve=ok;reject=no});return{promise,resolve,reject}};
+const delayed=fixture(),saveGate=deferred(),logoutGate=deferred();delayed.setMe(account());await delayed.run('initAuth()');delayed.setApiHook(action=>action==='save'?saveGate.promise:logoutGate.promise);
+delayed.context.db.transactions.push({id:'before-logout',amount:20});delayed.run('persist()');await Promise.resolve();
+assert.equal(delayed.calls.filter(call=>call.action==='save').length,1);
+const closing=delayed.run('lockApp()');assert.equal(delayed.context.sessionClosing,true,'logout must block actions synchronously');assert.equal(delayed.element('body').classList.contains('session-closing'),true);
+const allowExpression=source.match(/allow:(name=>[\s\S]*?),onError:/)?.[1];assert.ok(allowExpression,'delegated authorization guard must exist');
+Object.assign(delayed.context,{publicActions:new Set(['authSubmit']),clinicalActions:new Set(['saveClient']),adminActions:new Set(['saveDashboardSettings']),requireClinic:()=>true});
+const allow=delayed.run('('+allowExpression+')');
+for(const action of ['authSubmit','saveExpense','saveClient','saveDashboardSettings'])assert.equal(allow(action),false,'all delegated actions must stop while logging out');
+delayed.context.db.transactions.push({id:'during-logout',amount:30});delayed.run('persist()');await delayed.run('lockApp()');assert.equal(delayed.calls.filter(call=>call.action==='save').length,1,'late mutations must not enqueue another write');assert.equal(delayed.calls.filter(call=>call.action==='logout').length,0,'logout must wait for the existing write');
+saveGate.resolve({revision:5});await delayed.context.saveChain;await Promise.resolve();assert.equal(delayed.calls.filter(call=>call.action==='logout').length,1);assert.equal(delayed.calls.find(call=>call.action==='save').payload.data.transactions.length,1,'the captured write must exclude mutations made during logout');assert.equal(delayed.context.sessionClosing,true);
+logoutGate.resolve({ok:true});await closing;assert.equal(delayed.context.sessionClosing,false);assert.equal(delayed.state().unlocked,false);assert.equal(delayed.state().revision,0);assert.deepEqual(delayed.state().data,{transactions:[]});
 
-const usernameOnly=fixture();
-usernameOnly.setResponse({registered:['podo','personal'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'},{profile:'personal',username:'jefferson'}]});
-await usernameOnly.run('initAuth()');
-usernameOnly.element('authUsername').value=' JEFFERSON ';
-usernameOnly.element('authPassword').value='ExampleLogin123!';
-await usernameOnly.run('authSubmit()');
-assert.equal(usernameOnly.calls.at(-1).action,'login');
-assert.equal(usernameOnly.calls.at(-1).payload.profile,'personal','Username chooses its own profile without profile buttons');
-assert.equal(usernameOnly.calls.at(-1).payload.username,'jefferson');
-for(const personalAccounts of [[{profile:'personal',username:'jefferson'},{profile:'personal',username:'filla'}],[{profile:'personal',username:'filla'},{profile:'personal',username:'jefferson'}]]){
- const multiUser=fixture();
- multiUser.setResponse({registered:['podo','personal'],setupAvailable:false,accounts:[{profile:'podo',username:'raquel'},...personalAccounts]});
- await multiUser.run('initAuth()');
- assert.equal(multiUser.run('profileForUsername("jefferson")'),'personal');
- assert.equal(multiUser.run('profileForUsername(" FILLA ")'),'personal');
- assert.equal(multiUser.run('profileForUsername("constructor")'),null);
- multiUser.element('authUsername').value=' FILLA ';
- multiUser.element('authPassword').value='SyntheticFriend123!';
- multiUser.run('syncLoginProfile()');
- assert.equal(multiUser.element('authUsername').value,' FILLA ','Selecting a profile preserves the entered account');
- assert.equal(multiUser.element('authPassword').value,'SyntheticFriend123!','Profile detection preserves an autofilled password');
- await multiUser.run('authSubmit()');
- assert.equal(multiUser.calls.at(-1).action,'login');
- assert.equal(multiUser.calls.at(-1).payload.profile,'personal');
- assert.equal(multiUser.calls.at(-1).payload.username,'filla');
- assert.equal(multiUser.calls.at(-1).payload.password,'SyntheticFriend123!');
- multiUser.element('authUsername').value='jefferson';
- multiUser.element('authPassword').value='SyntheticOwner123!';
- await multiUser.run('authSubmit()');
- assert.equal(multiUser.calls.at(-1).payload.username,'jefferson');
+const queued=fixture(),queueGate=deferred();queued.setMe(account());await queued.run('initAuth()');queued.context.saveChain=queueGate.promise;queued.run('persist()');queued.context.sessionEpoch++;queued.context.revision=50;queued.context.db={transactions:[{id:'new-account'}]};queueGate.resolve();await queued.context.saveChain;assert.equal(queued.calls.some(call=>call.action==='save'),false,'a queued save from an old session must never be dispatched');assert.equal(queued.context.revision,50);
+for(const fail of [false,true]){
+ const stale=fixture(),gate=deferred();stale.setMe(account());await stale.run('initAuth()');stale.setApiHook(()=>gate.promise);stale.run('persist()');await Promise.resolve();assert.equal(stale.calls.filter(call=>call.action==='save').length,1);stale.context.sessionEpoch++;stale.context.revision=60;stale.context.db={transactions:[{id:'different-account'}]};if(fail)gate.reject(Error('Old session failure'));else gate.resolve({revision:999});await stale.context.saveChain;assert.equal(stale.context.revision,60,'late responses must not overwrite another session revision');assert.equal(stale.context.saveFailed,false,'late failures must not poison another session');assert.equal(stale.alerts.length,0);assert.equal(stale.context.db.transactions[0].id,'different-account');
 }
-console.log('OK: autenticação, recuperação da API, usuários nomeados e troca obrigatória da senha temporária.');
+console.log('OK: autenticação modular, status mínimo, login por usuário, senha temporária, capacidades e limpeza da sessão.');

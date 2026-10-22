@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {createClinicFeatures} from '../clinic-features.js';
+
+const elements=new Map();
+const $=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false});return elements.get(id)};
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let db={clients:[{id:'old',name:'Ana <Silva>',phone:'47999999999',notes:'Antiga',custom:'preservado'}],appointments:[{id:'a1',clientId:'old',date:'2026-10-22',time:'09:30'},{id:'personal',type:'personal',title:'Academia'}]};
+let allowed=true,saved=0,closed=0,rendered=0,opened,windowCall;const alerts=[];
+const ctx={get db(){return db},$,esc,uid:()=> 'new',requireClinic:()=>allowed,modal:(title,html)=>{opened={title,html}},field:(name,id,type,value)=>`<label>${name}<input id="${id}" value="${esc(value)}"></label>`,formHtml:(html,action)=>`<form>${html} ${action}</form>`,persist:()=>saved++,closeModal:()=>closed++,renderAll:()=>rendered++,clientHistoryHtml:id=>`<section>Histórico ${id}</section>`,alert:message=>alerts.push(message),openWindow:(...args)=>windowCall=args};
+const clinic=createClinicFeatures(ctx);
+clinic.openClient('old');
+assert.match(opened.html,/cDiabetes/);assert.match(opened.html,/cHypertension/);assert.match(opened.html,/cCirculationProblems/);assert.match(opened.html,/cAnticoagulants/);assert.match(opened.html,/maxlength="2000"/);assert.match(opened.html,/Histórico old/);assert.match(opened.html,/Ana &lt;Silva&gt;/);assert.equal(db.clients[0].anamnesis,undefined,'opening legacy record must not mutate it');
+for(const [id,value]of Object.entries({cName:'Ana Silva',cPhone:'(47) 99999-9999',cNotes:'Observação',cDiabetes:'type2',cAllergies:'Látex <script>'}))$(id).value=value;
+$('cHypertension').checked=true;$('cCirculationProblems').checked=true;$('cAnticoagulants').checked=false;
+clinic.saveClient('old');
+assert.deepEqual(db.clients[0].anamnesis,{diabetes:'type2',hypertension:true,circulationProblems:true,anticoagulants:false,allergies:'Látex <script>'});assert.equal(db.clients[0].custom,'preservado');assert.equal(db.clients[0].phone,'47999999999');assert.equal(saved,1);assert.equal(closed,1);assert.equal(rendered,1);
+clinic.openClient('old');assert.match(opened.html,/value="type2" selected/);assert.match(opened.html,/Látex &lt;script&gt;/);assert.doesNotMatch(opened.html,/<script>/);
+const risk=clinic.riskBadge(db.clients[0]);assert.match(risk,/Diabetes tipo 2/);assert.match(risk,/Hipertensão/);assert.match(risk,/pill red/);assert.doesNotMatch(risk,/<script>|Látex|Ana/);assert.equal(clinic.riskBadge({anamnesis:{diabetes:'<img>',hypertension:'true'}}),'');
+$('cAllergies').value='x'.repeat(2001);clinic.saveClient('old');assert.equal(saved,1);assert.match(alerts.at(-1),/2.000/);$('cAllergies').value='';$('cDiabetes').value='invalid';clinic.saveClient('old');assert.equal(saved,1);
+$('cDiabetes').value='none';$('cName').value='Bia';clinic.saveClient('');assert.equal(db.clients.length,2);assert.equal(db.clients.at(-1).anamnesis.diabetes,'none');
+const expected='Olá Ana Silva, confirmamos seu horário de Podologia em 22/10/2026 às 09:30. Favor confirmar presença.';
+assert.equal(clinic.whatsappUrl(db.clients[0],db.appointments[0]),'https://wa.me/5547999999999?text='+encodeURIComponent(expected));
+assert.match(clinic.whatsappUrl({...db.clients[0],phone:'+55 (47) 99999-9999'},db.appointments[0]),/^https:\/\/wa\.me\/5547999999999\?/);
+assert.equal(clinic.whatsappUrl({...db.clients[0],phone:'123'},db.appointments[0]),'');assert.equal(clinic.whatsappUrl(db.clients[0],db.appointments[1]),'');
+clinic.openWhatsApp('a1');assert.deepEqual(windowCall,[clinic.whatsappUrl(db.clients[0],db.appointments[0]),'_blank','noopener,noreferrer']);
+db={clients:[{id:'old',name:'Nova conta',phone:'11988887777'}],appointments:[{id:'other',clientId:'old',date:'2026-11-07',time:'08:00'}]};clinic.openWhatsApp('other');assert.match(decodeURIComponent(windowCall[0]),/Nova conta/);
+allowed=false;const previous={saved,opened,windowCall};clinic.openClient('old');clinic.saveClient('old');clinic.openWhatsApp('other');assert.equal(clinic.whatsappUrl(db.clients[0],db.appointments[0]),'');assert.equal(clinic.riskBadge(db.clients[0]),'');assert.equal(saved,previous.saved);assert.equal(opened,previous.opened);assert.equal(windowCall,previous.windowCall);
+console.log('OK: anamnese, preservação de clientes antigos, avisos clínicos, WhatsApp e autorização.');

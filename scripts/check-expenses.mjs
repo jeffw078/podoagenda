@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {validAnamnesis} from '../lib/access-control.js';
+const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 
-const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+const html=await readFile(new URL('../app.js',import.meta.url),'utf8');
 const source=html.slice(html.indexOf('function planExpensePayments('),html.indexOf('function renderPersonal('))+'\n'+html.slice(html.indexOf('function deleteTransaction('),html.indexOf('function totals('));
 const elements=new Map(),alerts=[];
 const element=id=>{
@@ -46,7 +48,7 @@ assert.equal(context.totals('2026-10-01','2026-10-31').expense,0);
 assert.equal(context.totals('2026-12-01','2026-12-31').expense,33.34);
 assert.equal(context.totals('2027-01-01','2027-01-31').expense,0,'An unpaid invoice must not be charged to available cash');
 const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
-const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{FinanceCore:context.FinanceCore});
+const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{FinanceCore:context.FinanceCore,validAnamnesis,objectValue});
 assert.equal(validate(db),true);
 
 element('ePaymentMethod').value='debit';context.updateExpensePayment();
