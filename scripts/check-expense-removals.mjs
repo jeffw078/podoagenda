@@ -86,3 +86,4 @@ const unordered={transactions:[{id:'x',type:'expense',amount:10,description:'X',
 const reordered={transactions:[{date:'2026-10-01',description:'X',amount:10,type:'expense',id:'x'}]};
 assert.equal(expenseHistoryUnchanged(unordered,reordered),true,'JSONB key order does not invalidate an unchanged expense');
 assert.equal(expenseHistoryUnchanged(unordered,{...reordered,finance:{expenseRemovals:[{id:'forged'}]}}),false,'Generic saves cannot forge the removal audit');
+assert.equal(expenseHistoryUnchanged(unordered,{...reordered,finance:{bankStatementImports:[{id:'forged'}]}}),false,'Generic saves cannot forge the bank reconciliation audit');
