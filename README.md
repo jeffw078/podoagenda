@@ -1,4 +1,4 @@
-# Meu Studio — Neon (versão para Vercel)
+# Finança Fácil — Neon (versão para Vercel)
 
 Usuários com acesso por nome e senha: Raquel entra no consultório e Jefferson no controle pessoal. Contas pessoais adicionais têm os mesmos controles financeiros, com dados próprios e sem dashboard. O navegador usa a API da Vercel; os dados ficam no PostgreSQL do Neon. Sem `DATABASE_URL` o app não consegue funcionar. O painel conjunto e a edição das configurações dos dois ambientes são exclusivos do Jefferson.
 
@@ -47,7 +47,7 @@ e [UUID no PostgreSQL](https://www.postgresql.org/docs/current/functions-uuid.ht
 - Dashboard amplo para computador em **Jefferson → Configurações → Abrir dashboard**, com visão financeira dos dois ambientes e configurações de saldo, planejamento/reserva, recorrências e, no consultório, serviços e horários. A API verifica a identidade do Jefferson e a revisão de cada perfil antes de gravar. Os dados de clientes, agenda e transações do outro ambiente são preservados.
 - OCR de cupom e as operações de importar/exportar JSON foram removidos.
 
-- Ícone de agenda e dinheiro para o app salvo no celular: `manifest.json`, ícones PNG de 192 e 512 pixels, versão para iPhone de 180 pixels e favicon. O nome do atalho é **PodoAgenda**, com abertura em modo independente. Depois de publicar os arquivos, adicione o site à tela inicial pelo navegador; atalhos antigos podem precisar ser removidos e adicionados novamente para atualizar o ícone. Não inclui acesso offline: os dados continuam dependendo da API e do banco.
+- Ícone com o número **8** e a sigla **AES** para o app salvo no celular: `manifest.json`, ícones PNG de 192 e 512 pixels, versão para iPhone de 180 pixels e favicon. O nome do atalho é **Finança Fácil**, com abertura em modo independente. Depois de publicar os arquivos, adicione o site à tela inicial pelo navegador; atalhos antigos podem precisar ser removidos e adicionados novamente para atualizar o ícone. Não inclui acesso offline: os dados continuam dependendo da API e do banco.
 
 - Agenda do dia com cards para cada intervalo livre, antes, entre e depois dos atendimentos, respeitando o expediente e o almoço. Clicar em **Adicionar atendimento** preenche data e início; as sugestões mostram até três serviços que cabem no intervalo, usando as durações do catálogo. Clicar em uma sugestão também seleciona o serviço.
 - Compromissos pessoais na mesma agenda pelo botão **+ Pessoal** ou pelo tipo do agendamento: título e duração, sem cliente, serviços ou pagamento. Podem ocorrer fora do expediente e durante o almoço, sem sobrepor outros compromissos. Os registros são preservados no banco; registros antigos continuam sendo atendimentos.
