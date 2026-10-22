@@ -28,6 +28,7 @@ function financeMutate(action, after) {
 }
 function financeSync(month) {
   const before = JSON.stringify(db.finance);
+  FinanceCore.ensureCreditCards(db, month);
   const bills = FinanceCore.syncMonth(db, month);
   if (JSON.stringify(db.finance) !== before) persist();
   return bills;
@@ -55,10 +56,34 @@ function financeBillRows(bills, compact = false) {
 function financeKpi(label, value, hint = '', extra = '') {
   return `<div class="kpi ${extra}"><div class="lbl">${label}</div><div class="num ${Number(value) < 0 ? 'negative' : ''}">${esc(money(value))}</div>${hint ? `<p class="footer-note">${hint}</p>` : ''}</div>`;
 }
-function renderPersonalFinance() {
-  const target = $('personalFinanceContent');
+function financeCardName(id){return {nubank:'Nubank',mercado_pago:'Mercado Pago'}[id]||'Cartão de crédito'}
+function financeCreditEditButton(purchase){
+ return purchase.installments.some((part,index)=>FinanceCore.canEditCreditInstallment(db,purchase.id,index))?'<button type="button" class="btn outline small" onclick="financeOpenCreditEdit('+financeArgument(purchase.id)+')">Editar parcelas futuras</button>':'';
+}
+function financeOpenCreditEdit(id){
+ const purchase=FinanceCore.ensure(db).creditPurchases.find(row=>row.id===id);
+ if(!purchase)return financeError(Error('Compra não encontrada.'));
+ modal('Editar parcelas · '+financeCardName(purchase.cardId),'<form class="fields" onsubmit="event.preventDefault();financeSaveCreditEdit('+financeArgument(id)+')"><div class="notice"><strong>'+esc(purchase.description)+'</strong><br>Altere valor e mês das parcelas em aberto. Meses passados e faturas encerradas são preservados. O total da compra será atualizado pela soma das parcelas.</div>'+purchase.installments.map((part,index)=>{
+  const allowed=FinanceCore.canEditCreditInstallment(db,id,index),disabled=allowed?'':'disabled';
+  return '<fieldset class="fields"><legend>Parcela '+part.installmentNumber+'/'+part.installmentCount+(allowed?'':' · Preservada')+'</legend><div class="fields two">'+financeInput('Mês da fatura','financeEditMonth_'+index,'month',part.date.slice(0,7),'required '+disabled)+financeInput('Valor (R$)','financeEditAmount_'+index,'number',part.amount,'required min="0.01" step="0.01" '+disabled)+'</div></fieldset>';
+ }).join('')+'<label class="field">Motivo da alteração<textarea id="financeCreditEditReason" required maxlength="500" rows="2" placeholder="Ex.: Desconto ou renegociação"></textarea></label><button class="btn full" type="submit">Salvar parcelas</button></form>'+(db.finance.creditEdits||[]).filter(edit=>edit.purchaseId===id).reverse().map(edit=>'<p class="footer-note">'+financeDateLabel(edit.date)+' · '+esc(edit.reason)+' · '+esc(money(edit.before.amount))+' → '+esc(money(edit.after.amount))+'</p>').join(''));
+}
+function financeSaveCreditEdit(id){
+ financeMutate(()=>{
+  const purchase=FinanceCore.ensure(db).creditPurchases.find(row=>row.id===id);
+  if(!purchase)throw Error('Compra não encontrada.');
+  const installments=purchase.installments.map((part,index)=>({...part,date:$('financeEditMonth_'+index).value+'-01',amount:financeAmount('financeEditAmount_'+index)}));
+  FinanceCore.editCreditInstallments(db,id,{installments,reason:$('financeCreditEditReason').value.trim()});
+ });
+}
+function financeCreditPurchasesHtml(month){
+ const purchases=(FinanceCore.ensure(db).creditPurchases||[]).filter(purchase=>purchase.installments.some(part=>part.date.slice(0,7)===month));
+ return '<section class="card"><h3>Compras no crédito</h3><p class="footer-note">As parcelas são somadas à conta mensal do cartão. Registre o pagamento da fatura em Contas.</p>'+(purchases.length?purchases.map(purchase=>{const parts=purchase.installments.filter(part=>part.date.slice(0,7)===month);return '<div class="finance-transaction"><div><strong>'+esc(purchase.description)+'</strong><small>'+esc(financeCardName(purchase.cardId))+' · Compra em '+financeDateLabel(purchase.purchaseDate)+'</small><small>'+parts.map(part=>'Parcela '+part.installmentNumber+'/'+part.installmentCount+' · '+esc(money(part.amount))).join(' · ')+' · Total '+esc(money(purchase.amount))+'</small>'+financeCreditEditButton(purchase)+'</div></div>'}).join(''):'<p class="empty">Nenhuma compra no crédito para esta fatura.</p>')+'</section>';
+}
+function renderPersonalFinance(targetId = 'personalFinanceContent', monthId = 'personalMonth') {
+  const target = $(targetId);
   if (!target) return;
-  const month = financeMonth('personalMonth');
+  const month = financeMonth(monthId);
   const bills = financeSync(month);
   const summary = FinanceCore.monthlySummary(db, month, dateToday);
   const plan = db.finance.monthlyPlans.find(item => item.month === month);
@@ -74,7 +99,7 @@ function renderPersonalFinance() {
   <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3><button class="btn outline small" onclick="financeOpenPlan(${financeArgument(month)})">Planejar mês</button></div>
     <dl class="finance-summary"><div><dt>Renda mensal prevista</dt><dd>${plan ? esc(money(plan.expectedIncome)) : 'Não informada'}</dd></div><div><dt>Entradas lançadas</dt><dd>${esc(money(summary.income))}</dd></div><div><dt>Contas pagas</dt><dd>${esc(money(summary.billsPaid))}</dd></div><div><dt>Disponível após as contas previstas</dt><dd>${esc(money(summary.freeAfterBills))}</dd></div></dl>${unknown ? '<p class="notice warn">Existem contas sem valor previsto. O disponível após as contas ainda pode mudar.</p>' : ''}
     ${!db.finance.openingBalance ? '<button type="button" class="btn secondary full" onclick="financeOpenBalance()">Cadastrar meu saldo atual</button>' : ''}
-  </section><section class="card"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills')">Ver / adicionar</button></div>${financeBillRows(bills, true)}</section></div>
+  </section><section class="card"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills')">Ver / adicionar</button></div>${financeBillRows(bills, true)}</section></div>${financeCreditPurchasesHtml(month)}
   <section class="card"><h3>Movimentações do mês</h3>${transactions.length ? transactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || t.category || 'Lançamento')}</strong><small>${financeDateLabel(t.date)} · ${esc(t.financeKind === 'reserve' ? 'Reserva' : t.financeKind === 'bill' ? 'Conta paga' : t.category || 'Movimentação')}</small></div><strong class="${t.type === 'income' ? 'positive' : 'negative'}">${t.type === 'income' ? '+' : '−'} ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Sem movimentações neste mês.</p>'}</section>`;
 }
 
@@ -84,7 +109,7 @@ function openFinanceExpenses(tab = 'bills', preserveMonth = false) {
   financeBillsSelectedMonth = month;
   const tabs = `<div class="tabs finance-tabs" aria-label="Tipo de despesa"><button type="button" class="${spending ? '' : 'selected'}" aria-pressed="${!spending}" onclick="openFinanceExpenses('bills',true)">Contas</button><button type="button" class="${spending ? 'selected' : ''}" aria-pressed="${spending}" onclick="openFinanceExpenses('spending',true)">Gastos</button></div>`;
   if (spending) {
-    modal('Contas e gastos', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, mantenha as parcelas no mês de cada fatura.</p>' + renderSpendingForm());
+    modal('Contas e gastos', tabs + '<p class="footer-note">Registre compras e seus itens. No crédito, escolha o cartão e o mês de cada fatura.</p>' + renderSpendingForm()+financeCreditPurchasesHtml(month));
     showSpendingFields();
     return;
   }
@@ -113,12 +138,12 @@ function financeOpenPayment(id) {
   if (!bill || bill.status !== 'pending') return financeError(Error('Esta conta não está pendente.'));
   modal('Pagar conta', `<form class="fields" onsubmit="event.preventDefault();financeSavePayment(${financeArgument(id)})"><div class="notice"><strong>${esc(bill.description)}</strong><br>Previsto: ${bill.expectedAmount == null ? 'Sem previsão' : esc(money(bill.expectedAmount))} · Vencimento: ${financeDateLabel(bill.dueDate)}</div>
     ${financeInput('Valor pago (R$)', 'financePayAmount', 'number', bill.expectedAmount ?? '', 'required min="0.01" step="0.01"')}${financeInput('Data do pagamento', 'financePayDate', 'date', dateToday, 'required')}
-    <label class="field">Forma de pagamento<select id="financePayMethod" required><option value="">Selecione</option><option value="pix">Pix</option><option value="debit">Débito</option><option value="cash">Dinheiro</option><option value="transfer">Transferência</option><option value="credit">Crédito à vista</option><option value="other">Outra</option></select></label><p class="footer-note">O pagamento cria um único lançamento e preserva o valor previsto da conta.</p><button type="submit" class="btn full">Confirmar pagamento</button></form>`);
+    <label class="field">Forma de pagamento<select id="financePayMethod" required><option value="">Selecione</option><option value="pix">Pix</option><option value="debit">Débito</option><option value="cash">Dinheiro</option><option value="transfer">Transferência</option><option value="other">Outra</option></select></label><p class="footer-note">O pagamento sai do saldo disponível e preserva o valor previsto. Para compras no crédito, use a guia Gastos e selecione o cartão.</p><button type="submit" class="btn full">Confirmar pagamento</button></form>`);
 }
 function financeSavePayment(id) {
   financeMutate(() => {
     const method = $('financePayMethod').value;
-    if (!method) throw Error('Selecione a forma de pagamento.');
+    if (!['pix','debit','cash','transfer','other'].includes(method)) throw Error('Selecione uma forma de pagamento com saldo. Para crédito, use Gastos e escolha o cartão.');
     FinanceCore.payBill(db, id, { amount: financeAmount('financePayAmount'), date: $('financePayDate').value, method });
   });
 }
@@ -141,7 +166,7 @@ function financeUpdatePlanMode(scope = '') {
   if (percentage) $(id('financePlanValue')).setAttribute('max', '100');
   else $(id('financePlanValue')).removeAttribute('max');
 }
-function financeOpenPlan(month) { modal('Planejamento e reserva', financePlanForm(month || financeMonth('personalMonth'))); }
+function financeOpenPlan(month) { modal('Planejamento e reserva', financePlanForm(month || financeMonth(profile === 'personal' ? 'personalMonth' : 'financeMonth'))); }
 function financeSavePlan(month, scope = '') {
   const id = name => name + (scope ? '_' + scope : '');
   financeMutate(() => FinanceCore.setMonthPlan(db, month, { expectedIncome: financeAmount(id('financePlanIncome')), reserveMode: $(id('financePlanMode')).value, reserveValue: financeAmount(id('financePlanValue')), reserveDueDay: Number($(id('financePlanDue')).value) }));
@@ -172,13 +197,14 @@ function financeSaveBalance() {
 }
 function financeOpenRecurring(id = '') {
   const rule = FinanceCore.ensure(db).recurringBills.find(item => item.id === id) || { description: '', category: 'Outros', fixed: true, expectedAmount: '', dueDay: 10, startMonth: financeSettingsSelectedMonth || dateToday.slice(0, 7), endMonth: '', active: true };
-  modal(id ? 'Editar conta recorrente' : 'Nova conta recorrente', `<form class="fields" onsubmit="event.preventDefault();financeSaveRecurring(${financeArgument(id)})">${financeInput('Descrição', 'financeRecurringDescription', 'text', rule.description, 'required maxlength="180"')}<label class="field">Categoria<select id="financeRecurringCategory">${financeCategories(rule.category)}</select></label><div class="fields two"><label class="field">Tipo de conta<select id="financeRecurringType" onchange="financeUpdateRecurringType()"><option value="fixed" ${rule.fixed ? 'selected' : ''}>Fixa</option><option value="variable" ${rule.fixed ? '' : 'selected'}>Variável</option></select></label>${financeInput('Valor previsto (R$)', 'financeRecurringAmount', 'number', rule.expectedAmount ?? '', `${rule.fixed ? 'required' : ''} min="0" step="0.01" placeholder="Sem previsão"`)}</div><p class="footer-note">Contas fixas exigem valor. Em contas variáveis, deixe vazio se ainda não conhecer a previsão.</p><div class="fields two">${financeInput('Dia do vencimento', 'financeRecurringDue', 'number', rule.dueDay, 'required min="1" max="31" step="1"')}<label class="field">Situação<select id="financeRecurringActive"><option value="true" ${rule.active ? 'selected' : ''}>Ativa</option><option value="false" ${rule.active ? '' : 'selected'}>Inativa</option></select></label></div><div class="fields two">${financeInput('Mês de início', 'financeRecurringStart', 'month', rule.startMonth, 'required')}${financeInput('Mês final (opcional)', 'financeRecurringEnd', 'month', rule.endMonth || '')}</div><p class="footer-note">Uma conta é gerada por mês. Alterações preservam contas já pagas.</p><button type="submit" class="btn full">Salvar recorrência</button></form>`);
+  modal(id ? 'Editar conta recorrente' : 'Nova conta recorrente', `<form class="fields" onsubmit="event.preventDefault();financeSaveRecurring(${financeArgument(id)})">${financeInput('Descrição', 'financeRecurringDescription', 'text', rule.description, 'required maxlength="180"')}<label class="field">Categoria<select id="financeRecurringCategory">${financeCategories(rule.category)}</select></label><div class="fields two"><label class="field">Tipo de conta<select id="financeRecurringType" onchange="financeUpdateRecurringType()"><option value="fixed" ${rule.fixed ? 'selected' : ''}>Fixa</option><option value="variable" ${rule.fixed ? '' : 'selected'}>Variável</option></select></label>${financeInput(rule.cardId ? 'Valor base adicional (R$)' : 'Valor previsto (R$)', 'financeRecurringAmount', 'number', rule.expectedAmount ?? '', `${rule.fixed ? 'required' : ''} min="0" step="0.01" placeholder="Sem previsão"`)}</div><p class="footer-note">${rule.cardId ? 'As compras deste cartão são somadas automaticamente. Informe aqui somente um valor adicional que ainda não foi cadastrado em Gastos; deixe zero se não houver.' : 'Contas fixas exigem valor. Em contas variáveis, deixe vazio se ainda não conhecer a previsão.'}</p><div class="fields two">${financeInput('Dia do vencimento', 'financeRecurringDue', 'number', rule.dueDay, 'required min="1" max="31" step="1"')}<label class="field">Situação<select id="financeRecurringActive"><option value="true" ${rule.active ? 'selected' : ''}>Ativa</option><option value="false" ${rule.active ? '' : 'selected'}>Inativa</option></select></label></div><div class="fields two">${financeInput('Mês de início', 'financeRecurringStart', 'month', rule.startMonth, 'required')}${financeInput('Mês final (opcional)', 'financeRecurringEnd', 'month', rule.endMonth || '')}</div><p class="footer-note">Uma conta é gerada por mês. Alterações preservam contas já pagas.</p><button type="submit" class="btn full">Salvar recorrência</button></form>`);
 }
 function financeUpdateRecurringType() { $('financeRecurringAmount').required = $('financeRecurringType').value === 'fixed'; }
 function financeSaveRecurring(id = '') {
   financeMutate(() => {
     const fixed = $('financeRecurringType').value === 'fixed';
-    FinanceCore.saveRecurring(db, { ...(id ? { id } : {}), description: $('financeRecurringDescription').value.trim(), category: $('financeRecurringCategory').value, fixed, expectedAmount: financeAmount('financeRecurringAmount', !fixed), dueDay: Number($('financeRecurringDue').value), startMonth: $('financeRecurringStart').value, endMonth: $('financeRecurringEnd').value || null, active: $('financeRecurringActive').value === 'true' });
+    const existing=FinanceCore.ensure(db).recurringBills.find(rule=>rule.id===id);
+    FinanceCore.saveRecurring(db, { ...(id ? { id } : {}), ...(existing?.cardId?{cardId:existing.cardId}:{}), description: $('financeRecurringDescription').value.trim(), category: $('financeRecurringCategory').value, fixed, expectedAmount:existing?.cardId&& !$('financeRecurringAmount').value.trim()?0:financeAmount('financeRecurringAmount', !fixed), dueDay: Number($('financeRecurringDue').value), startMonth: $('financeRecurringStart').value, endMonth: $('financeRecurringEnd').value || null, active: $('financeRecurringActive').value === 'true' });
     FinanceCore.syncMonth(db, financeSettingsSelectedMonth || dateToday.slice(0, 7));
     if (financeBillsSelectedMonth) FinanceCore.syncMonth(db, financeBillsSelectedMonth);
   });
@@ -195,6 +221,6 @@ function renderFinanceSettings() {
   financeSync(month);
   const finance = FinanceCore.ensure(db);
   target.innerHTML = `<section class="card"><div class="finance-heading"><h3>Planejamento financeiro</h3>${financeInput('Mês', 'financeSettingsMonth', 'month', month, 'required onchange="financeSettingsMonthChanged()"')}</div>${financePlanForm(month, 'settings')}</section>
-    <section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}</section>
+    <section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Base: ' : ''}${rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${rule.active ? 'Ativa' : 'Inativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button></div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}</section>
     <section class="card"><div class="finance-heading"><h3>Saldo atual e histórico</h3><button type="button" class="btn outline small" onclick="financeOpenBalance()">${finance.openingBalance ? 'Conferir / corrigir' : 'Cadastrar saldo'}</button></div><div class="finance-balance-value">${esc(money(FinanceCore.currentBalance(db, dateToday)))}</div><p class="footer-note">Saldo cadastrado atualizado pelos lançamentos até ${financeDateLabel(dateToday)}.</p>${finance.openingBalance ? `<div class="finance-audit"><strong>Ponto inicial · ${financeDateLabel(finance.openingBalance.date)}</strong><span>${esc(money(finance.openingBalance.amount))}</span></div>` : '<p class="notice">O saldo inicial ainda não foi cadastrado.</p>'}${[...finance.adjustments].reverse().map(adjustment => `<article class="finance-audit"><div><strong>${financeDateLabel(adjustment.date)} · ${esc(adjustment.reason)}</strong><small>${esc(money(adjustment.before))} → ${esc(money(adjustment.after))}</small></div><span>${adjustment.delta >= 0 ? '+' : '−'} ${esc(money(Math.abs(adjustment.delta)))}</span></article>`).join('')}<p class="footer-note">O ponto inicial e as correções anteriores são preservados. Corrigir saldo exige um motivo e não cria receita ou despesa.</p></section>`;
 }

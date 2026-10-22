@@ -252,4 +252,250 @@ const recurringInput = (extra = {}) => ({ description: 'Aluguel', category: 'Cas
   assert.equal(effective.freeAfterBills, 500);
 }
 
+// Seeded card rules preserve edits and stay isolated from legacy transactions/profiles.
+{
+  const raquel = fresh(), jefferson = fresh();
+  assert.equal(typeof F.ensureCreditCards, 'function', 'core must expose card initialization');
+  F.ensureCreditCards(raquel, '2026-10');
+  assert.equal(raquel.finance.creditPurchases.length, 0);
+  assert.deepEqual(raquel.finance.recurringBills.map(row => [row.id, row.cardId, row.expectedAmount, row.startMonth]), [
+    ['card:nubank', 'nubank', 0, '2026-10'], ['card:mercado_pago', 'mercado_pago', 0, '2026-10']
+  ]);
+  const rule = raquel.finance.recurringBills[0];
+  F.saveRecurring(raquel, { ...rule, expectedAmount: 12.34, dueDay: 31 });
+  F.ensureCreditCards(raquel, '2027-01');
+  assert.equal(raquel.finance.recurringBills.length, 2);
+  assert.equal(rule.expectedAmount, 12.34);
+  assert.equal(rule.dueDay, 31);
+  assert.equal(rule.startMonth, '2026-10');
+  assert.equal(F.syncMonth(raquel, '2026-10').length, 2, 'zero estimates still show card invoices');
+  assert.equal(jefferson.finance, undefined);
+}
+
+const purchaseInput = (extra = {}) => ({ cardId: 'nubank', description: 'Compra', category: 'Mercado', purchaseDate: '2026-12-20', amount: 100, items: [{ name: 'Produto', qty: 1, unit: 100 }], installments: [
+  { date: '2026-12-01', amount: 33.34, installmentNumber: 1, installmentCount: 3 },
+  { date: '2027-01-01', amount: 33.33, installmentNumber: 2, installmentCount: 3 },
+  { date: '2027-02-01', amount: 33.33, installmentNumber: 3, installmentCount: 3 }
+], ...extra });
+
+// Credit commits to invoices in integer cents; only invoice payment affects cash.
+{
+  const data = fresh();
+  F.ensureCreditCards(data, '2026-12');
+  const rule = data.finance.recurringBills.find(row => row.cardId === 'nubank');
+  F.saveRecurring(data, { ...rule, expectedAmount: 0.1 });
+  const previous = structuredClone(data), input = purchaseInput();
+  const purchase = F.recordCreditPurchase(data, input);
+  input.items[0].name = 'Alterado';
+  input.installments[0].amount = 0;
+  assert.equal(purchase.items[0].name, 'Produto', 'stored history must not alias caller objects');
+  assert.equal(data.transactions.length, 0);
+  assert.equal(F.currentBalance(data, '2027-02-28'), 0);
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12').expectedAmount, 33.44);
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount, 33.43);
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:mercado_pago:2026-12').expectedAmount, 0);
+  assert.equal(F.validateFinance(data), true);
+  assert.equal(F.validateFinanceChange(previous, data), true);
+  F.saveRecurring(data, { ...rule, active: false, startMonth: '2027-05' });
+  F.syncMonth(data, '2026-12');
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12').expectedAmount, 33.34, 'pausing removes only the base');
+  const invoice = data.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12');
+  F.payBill(data, invoice.id, { amount: 33.34, date: '2026-12-25', method: 'Pix' });
+  F.syncMonth(data, '2026-12');
+  assert.equal(data.transactions.length, 1);
+  assert.equal(F.currentBalance(data, '2026-12-31'), -33.34);
+  assert.equal(F.monthlySummary(data, '2026-12', '2026-12-31').billsPaid, 33.34);
+  const snapshot = structuredClone(data);
+  assert.throws(() => F.recordCreditPurchase(data, purchaseInput()), /outro mês inicial/i);
+  assert.deepEqual(data, snapshot, 'closed-invoice rejection is atomic');
+  const removed = structuredClone(data); removed.finance.creditPurchases = [];
+  assert.equal(F.validateFinanceChange(data, removed), false);
+  const changed = structuredClone(data); changed.finance.creditPurchases[0].description = 'Outro';
+  assert.equal(F.validateFinanceChange(data, changed), false);
+  const removedRule = structuredClone(data); removedRule.finance.recurringBills = removedRule.finance.recurringBills.filter(row => row.id !== rule.id);
+  assert.equal(F.validateFinanceChange(data, removedRule), false, 'purchase card rule cannot be removed');
+  const stripped = structuredClone(data); delete stripped.finance;
+  assert.equal(F.validateFinanceChange(data, stripped), false);
+}
+
+// Invalid new credit schedules fail before initializing or otherwise changing data.
+{
+  const variants = [
+    { cardId: '' }, { cardId: 'unknown' }, { description: '' }, { category: '' },
+    { purchaseDate: '2026-02-29' }, { amount: 0 }, { amount: -1 }, { amount: 100.001 }, { amount: NaN },
+    { items: null }, { items: [{ name: '', qty: 1, unit: 100 }] },
+    { installments: [] }, { installments: purchaseInput().installments.slice(0, 2) },
+    { installments: purchaseInput().installments.map((part, index) => ({ ...part, ...(index === 0 ? { date: '2026-11-01' } : {}) })) },
+    { installments: purchaseInput().installments.map((part, index) => ({ ...part, ...(index === 1 ? { date: '2027-01-02' } : {}) })) },
+    { installments: purchaseInput().installments.map((part, index) => ({ ...part, ...(index === 1 ? { date: '2027-03-01' } : {}) })) },
+    { installments: purchaseInput().installments.map(part => ({ ...part, installmentNumber: 1 })) },
+    { installments: purchaseInput().installments.map(part => ({ ...part, installmentCount: 4 })) },
+    { installments: purchaseInput().installments.map(part => ({ ...part, amount: null })) },
+    { installments: [{ date: '2026-12-01', amount: 100, installmentNumber: 1, installmentCount: 2 }, { date: '2027-01-01', amount: 0, installmentNumber: 2, installmentCount: 2 }] }
+  ];
+  for (const variant of variants) {
+    const data = fresh(), snapshot = structuredClone(data);
+    assert.throws(() => F.recordCreditPurchase(data, purchaseInput(variant)), JSON.stringify(variant));
+    assert.deepEqual(data, snapshot, 'invalid purchases must not initialize finance');
+  }
+  const data = fresh(); F.ensureCreditCards(data, '2026-12'); F.syncMonth(data, '2026-12');
+  F.cancelBill(data, 'recurring:card:nubank:2026-12');
+  const snapshot = structuredClone(data);
+  assert.throws(() => F.recordCreditPurchase(data, purchaseInput()), /outro mês inicial/i);
+  assert.deepEqual(data, snapshot);
+}
+
+// Validators are read-only, support legacy documents and enforce card identity/history.
+{
+  const data = fresh(); F.ensure(data);
+  delete data.finance.creditPurchases;
+  const snapshot = structuredClone(data);
+  assert.equal(F.validateFinance(data), true);
+  assert.equal(F.validateFinanceChange(data, data), true);
+  assert.deepEqual(data, snapshot);
+  F.ensureCreditCards(data, '2026-12');
+  const before = structuredClone(data), rule = data.finance.recurringBills[0];
+  const omittedMarker = { ...rule }; delete omittedMarker.cardId;
+  F.saveRecurring(data, { ...omittedMarker, dueDay: 12 });
+  assert.equal(rule.cardId, 'nubank', 'ordinary recurrence edits preserve marker');
+  assert.throws(() => F.saveRecurring(data, { ...rule, cardId: 'mercado_pago' }));
+  assert.throws(() => F.saveRecurring(data, recurringInput({ cardId: 'nubank' })));
+  const changed = structuredClone(data); delete changed.finance.recurringBills[0].cardId;
+  assert.equal(F.validateFinanceChange(before, changed), false, 'existing marker cannot be stripped');
+  const duplicate = structuredClone(data); duplicate.finance.recurringBills.push({ ...rule, id: 'another' });
+  assert.equal(F.validateFinance(duplicate), false);
+  const wrongMarker = structuredClone(data); wrongMarker.finance.recurringBills[0].cardId = 'mercado_pago';
+  assert.equal(F.validateFinance(wrongMarker), false);
+  F.recordCreditPurchase(data, purchaseInput());
+  for (const change of [
+    copy => { copy.finance.creditPurchases[0].installments[0].amount = 30; },
+    copy => { copy.finance.creditPurchases[0].installments[1].date = '2027-02-01'; },
+    copy => { copy.finance.creditPurchases.push(structuredClone(copy.finance.creditPurchases[0])); },
+    copy => { copy.finance.creditPurchases[0].cardId = 'other'; }
+  ]) { const copy = structuredClone(data); change(copy); const frozen = structuredClone(copy); assert.equal(F.validateFinance(copy), false); assert.deepEqual(copy, frozen); }
+  const closedPrevious = fresh(); F.ensureCreditCards(closedPrevious, '2026-12'); F.syncMonth(closedPrevious, '2026-12'); F.cancelBill(closedPrevious, 'recurring:card:nubank:2026-12');
+  const forged = structuredClone(closedPrevious); forged.finance.creditPurchases.push({ id: 'forged-credit', ...purchaseInput() });
+  assert.equal(F.validateFinanceChange(closedPrevious, forged), false, 'server rejects purchases appended into closed months');
+}
+
+// Optional card markers and null bases still aggregate exact bank-specific obligations.
+{
+  const data = fresh(), otherProfile = fresh(); F.ensureCreditCards(data, '2026-12');
+  const nubank = data.finance.recurringBills.find(row => row.cardId === 'nubank');
+  delete nubank.cardId;
+  F.saveRecurring(data, { ...nubank, expectedAmount: null, dueDay: 31 });
+  const onePart = (amount, cardId = 'nubank') => purchaseInput({ cardId, amount, items: [], installments: [{ date: '2026-12-01', amount, installmentNumber: 1, installmentCount: 1 }] });
+  F.recordCreditPurchase(data, onePart(0.1));
+  F.recordCreditPurchase(data, onePart(0.2));
+  F.recordCreditPurchase(data, onePart(7.89, 'mercado_pago'));
+  assert.equal(data.finance.bills.find(row => row.sourceId === 'card:nubank').expectedAmount, 0.3);
+  assert.equal(data.finance.bills.find(row => row.sourceId === 'card:mercado_pago').expectedAmount, 7.89);
+  assert.equal(F.monthlySummary(data, '2026-12', '2026-12-31').pending, 8.19);
+  assert.equal(F.currentBalance(otherProfile, '2026-12-31'), 0);
+  assert.equal(otherProfile.finance.creditPurchases.length, 0);
+  F.ensureCreditCards(data, '2027-02');
+  assert.equal(data.finance.recurringBills.length, 2, 'markerless canonical rule is not duplicated');
+  assert.equal(F.validateFinance(data), true);
+}
+
+// Maximum schedules are allowed, while overflow, excessive parts and bad totals are atomic.
+{
+  const data = fresh();
+  const installments = Array.from({ length: 120 }, (_, index) => ({ date: `${2026 + Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}-01`, amount: 0.01, installmentNumber: index + 1, installmentCount: 120 }));
+  F.recordCreditPurchase(data, purchaseInput({ purchaseDate: '2026-01-31', amount: 1.2, items: [], installments }));
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2035-12').expectedAmount, 0.01);
+  assert.equal(F.validateFinance(data), true);
+  const excessive = purchaseInput({ purchaseDate: '2026-01-31', amount: 1.21, installments: [...installments, { date: '2036-01-01', amount: 0.01, installmentNumber: 121, installmentCount: 121 }].map(part => ({ ...part, installmentCount: 121 })) });
+  const snapshot = structuredClone(data);
+  assert.throws(() => F.recordCreditPurchase(data, excessive)); assert.deepEqual(data, snapshot);
+  const overflow = fresh(); F.ensureCreditCards(overflow, '2026-12');
+  const rule = overflow.finance.recurringBills[0];
+  F.saveRecurring(overflow, { ...rule, expectedAmount: 90071992547409.9 });
+  const before = structuredClone(overflow);
+  assert.throws(() => F.recordCreditPurchase(overflow, purchaseInput()));
+  assert.deepEqual(overflow, before, 'aggregate amount overflow must not append a purchase');
+}
+
+// Purchase debt cannot disappear through missing or understated generated invoices.
+{
+  const previous = fresh(); F.ensureCreditCards(previous, '2026-12');
+  const next = structuredClone(previous); F.recordCreditPurchase(next, purchaseInput());
+  for (const mutate of [
+    copy => { copy.finance.bills = copy.finance.bills.filter(row => row.id !== 'recurring:card:nubank:2027-01'); },
+    copy => { copy.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount = 0; },
+    copy => { copy.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount = null; },
+    copy => { copy.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount = 50; }
+  ]) {
+    const forged = structuredClone(next); mutate(forged);
+    const frozen = structuredClone(forged), before = structuredClone(previous);
+    assert.equal(F.validateFinance(forged), false, 'purchase requires an invoice with its complete expected amount');
+    assert.equal(F.validateFinanceChange(previous, forged), false);
+    assert.equal(F.validateFinanceChange(next, forged), false, 'existing debt cannot be stripped either');
+    assert.deepEqual(forged, frozen); assert.deepEqual(previous, before);
+  }
+}
+
+// Editing card recurrence updates every pending purchase month without rewriting closed history.
+{
+  const previous = fresh(); F.ensureCreditCards(previous, '2026-12');
+  const next = structuredClone(previous); F.recordCreditPurchase(next, purchaseInput());
+  F.payBill(next, 'recurring:card:nubank:2026-12', { amount: 1, date: '2026-12-25', method: 'Pix' });
+  F.cancelBill(next, 'recurring:card:nubank:2027-01');
+  assert.equal(F.validateFinanceChange(previous, next), true, 'actual payment can differ from correct invoice estimate');
+  for (const month of ['2026-12', '2027-01']) {
+    const forged = structuredClone(next); forged.finance.bills.find(row => row.id === `recurring:card:nubank:${month}`).expectedAmount = 0;
+    const frozen = structuredClone(forged);
+    assert.equal(F.validateFinanceChange(previous, forged), false, 'newly closed invoices must retain complete expected debt');
+    assert.deepEqual(forged, frozen);
+  }
+  const changed = structuredClone(next), rule = changed.finance.recurringBills.find(row => row.cardId === 'nubank');
+  rule.expectedAmount = 10;
+  changed.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12').expectedAmount = 43.34;
+  changed.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount = 43.33;
+  changed.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-02').expectedAmount = 43.33;
+  assert.equal(F.validateFinanceChange(previous, changed), true, 'same-save closures use updated recurring base');
+}
+
+// Editing card recurrence updates every pending purchase month without rewriting closed history.
+{
+  const data = fresh(); F.ensureCreditCards(data, '2026-12'); F.recordCreditPurchase(data, purchaseInput());
+  F.payBill(data, 'recurring:card:nubank:2026-12', { amount: 33.34, date: '2026-12-25', method: 'Pix' });
+  F.cancelBill(data, 'recurring:card:nubank:2027-02');
+  const before = structuredClone(data), rule = data.finance.recurringBills.find(row => row.cardId === 'nubank');
+  F.saveRecurring(data, { ...rule, expectedAmount: 10.25, dueDay: 20 });
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount, 43.58, 'future pending invoices include edited base immediately');
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').dueDate, '2027-01-20');
+  assert.deepEqual(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12'), before.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12'));
+  assert.deepEqual(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-02'), before.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-02'));
+  const frozen = structuredClone(data);
+  assert.equal(F.validateFinanceChange(before, data), true); assert.deepEqual(data, frozen);
+  F.saveRecurring(data, { ...rule, active: false });
+  assert.equal(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2027-01').expectedAmount, 33.33);
+  assert.equal(F.validateFinance(data), true);
+  const snapshot = structuredClone(data);
+  assert.throws(() => F.saveRecurring(data, { ...rule, active: true, expectedAmount: 90071992547409.9 }));
+  assert.deepEqual(data, snapshot, 'recurrence aggregate overflow fails before mutation');
+}
+
+// Older unsynchronized recurring estimates without identified purchase debt remain valid.
+{
+  const data = fresh(); F.ensureCreditCards(data, '2026-12');
+  F.recordCreditPurchase(data, purchaseInput({ amount: 1, items: [], installments: [{ date: '2026-12-01', amount: 1, installmentNumber: 1, installmentCount: 1 }] }));
+  F.payBill(data, 'recurring:card:nubank:2026-12', { amount: 1, date: '2026-12-25', method: 'Pix' });
+  const before = structuredClone(data), rule = data.finance.recurringBills.find(row => row.cardId === 'nubank');
+  F.saveRecurring(data, { ...rule, expectedAmount: 90071992547409.9 });
+  assert.equal(F.validateFinanceChange(before, data), true, 'historical paid invoice is independent of later base projections');
+  assert.deepEqual(data.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12'), before.finance.bills.find(row => row.id === 'recurring:card:nubank:2026-12'));
+}
+
+// Older unsynchronized recurring estimates without identified purchase debt remain valid.
+{
+  const data = fresh(); F.ensureCreditCards(data, '2026-12'); F.syncMonth(data, '2027-01');
+  data.finance.recurringBills.find(row => row.cardId === 'nubank').expectedAmount = 25;
+  const before = structuredClone(data);
+  assert.equal(F.validateFinance(data), true);
+  assert.equal(F.validateFinanceChange(data, data), true);
+  assert.deepEqual(data, before);
+}
+
 console.log('Finance core checks passed.');

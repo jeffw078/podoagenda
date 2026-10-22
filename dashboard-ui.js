@@ -21,7 +21,7 @@ async function loadManagementDashboard(){
 function dashboardAccount(target){const account=managementAccounts.find(item=>item.profile===target);if(!account)throw Error('Ambiente indisponível. Atualize o painel.');return account}
 function dashboardInput(label,id,type,value,extra=''){return '<label class="field">'+label+'<input id="'+id+'" type="'+type+'" value="'+esc(value??'')+'" '+extra+'></label>'}
 function dashboardEnvironment(account,month){
- const data=account.data;FinanceCore.syncMonth(data,month);
+ const data=account.data;FinanceCore.ensureCreditCards(data,month);FinanceCore.syncMonth(data,month);
  const finance=FinanceCore.ensure(data),summary=FinanceCore.monthlySummary(data,month,dateToday),p='dash_'+account.profile,studio=account.profile==='podo',plan=finance.monthlyPlans.find(item=>item.month===month)||{expectedIncome:0,reserveMode:'amount',reserveValue:0,reserveDueDay:10};
  const bills=finance.bills.filter(b=>b.month===month&&b.status==='pending'),unknown=summary.pendingUnknown;
  const metrics=[['Saldo disponível',summary.balance],['Entradas do mês',summary.income],['Contas pendentes',summary.pending],['Gastos e contas pagos',summary.spending+summary.billsPaid],['Reserva realizada',summary.reserved],['Após contas conhecidas',summary.freeAfterBills]];
@@ -36,9 +36,35 @@ function dashboardEnvironment(account,month){
  '<div class="fields two"><label class="field">Meta da reserva<select id="'+p+'_mode"><option value="amount" '+(plan.reserveMode==='amount'?'selected':'')+'>Valor fixo em reais</option><option value="percentage" '+(plan.reserveMode==='percentage'?'selected':'')+'>Percentual da renda prevista</option></select></label>'+dashboardInput('Valor ou percentual',p+'_reserve','number',plan.reserveValue,'min="0" step="0.01" required')+'</div>'+dashboardInput('Dia de vencimento da reserva',p+'_day','number',plan.reserveDueDay,'min="1" max="31" step="1" required')+
  (studio?'<div class="divider"></div><h3>Jornada da agenda</h3><div class="fields two">'+dashboardInput('Início',p+'_start','time',data.settings.start,'required')+dashboardInput('Fim',p+'_end','time',data.settings.end,'required')+'</div><div class="fields two">'+dashboardInput('Início do almoço',p+'_lunch','time',data.settings.lunch,'required')+dashboardInput('Almoço (minutos)',p+'_lunchDuration','number',data.settings.lunchDuration,'min="60" max="240" step="1" required')+'</div>':'')+
  '<button class="btn full" type="submit">Salvar configurações</button></form>'+
- '<div class="card"><div class="flex"><h3>Contas recorrentes</h3><button class="btn secondary small" onclick="dashboardOpenRecurring(\''+account.profile+'\')">+ Recorrência</button></div>'+(finance.recurringBills.map((rule,index)=>'<div class="item"><div><b>'+esc(rule.description)+'</b><small>'+(rule.fixed?'Fixa':'Variável')+' · '+(rule.expectedAmount===null?'Valor a definir':money(rule.expectedAmount))+' · dia '+rule.dueDay+' · '+(rule.active?'Ativa':'Pausada')+'</small></div><button class="btn outline small" onclick="dashboardOpenRecurring(\''+account.profile+'\','+index+')">Editar</button></div>').join('')||'<p class="muted">Nenhuma recorrência cadastrada.</p>')+'</div>'+
- (studio?'<div class="card"><div class="flex"><h3>Serviços</h3><button class="btn secondary small" onclick="dashboardOpenService()">+ Serviço</button></div>'+data.services.map((service,index)=>'<div class="item"><div><b>'+esc(service.name)+'</b><small>'+service.duration+' min · '+money(service.price)+'</small></div><button class="btn outline small" onclick="dashboardOpenService('+index+')">Editar</button></div>').join('')+'</div>':'')+
+ '<div class="card"><div class="flex"><h3>Contas recorrentes</h3><button class="btn secondary small" onclick="dashboardOpenRecurring(\''+account.profile+'\')">+ Recorrência</button></div>'+(finance.recurringBills.map((rule,index)=>'<div class="item"><div><b>'+esc(rule.description)+'</b><small>'+(rule.fixed?'Fixa':'Variável')+' · '+(rule.cardId?'Base: ':'')+(rule.expectedAmount===null?'Valor a definir':money(rule.expectedAmount))+' · dia '+rule.dueDay+' · '+(rule.active?'Ativa':'Pausada')+'</small></div><button class="btn outline small" onclick="dashboardOpenRecurring(\''+account.profile+'\','+index+')">Editar</button></div>').join('')||'<p class="muted">Nenhuma recorrência cadastrada.</p>')+'</div>'+
+ (studio?'<div class="card"><div class="flex"><h3>Serviços</h3><button class="btn secondary small" onclick="dashboardOpenService()">+ Serviço</button></div>'+data.services.map((service,index)=>service.archived?'':'<div class="item"><div><b>'+esc(service.name)+'</b><small>'+service.duration+' min · '+money(service.price)+'</small></div><button class="btn outline small" onclick="dashboardOpenService('+index+')">Editar</button><button class="btn danger small" onclick="dashboardDeleteService('+index+')">Excluir</button></div>').join('')+'</div>':'')+
+ dashboardCreditPurchases(account)+
  '<div class="card"><h3>Histórico de correções de saldo</h3>'+(finance.adjustments.slice().reverse().slice(0,10).map(a=>'<div class="item"><div><b>'+esc(a.reason)+'</b><small>'+esc(a.date)+' · '+money(a.before)+' → '+money(a.after)+'</small></div><span>'+money(a.delta)+'</span></div>').join('')||'<p class="muted">Nenhuma correção registrada.</p>')+'</div></article>';
+}
+function dashboardCardName(id){return {nubank:'Nubank',mercado_pago:'Mercado Pago'}[id]||'Cartão de crédito'}
+function dashboardCreditPurchases(account){
+ const purchases=(account.data.finance?.creditPurchases||[]).filter(purchase=>purchase.installments.some((part,index)=>FinanceCore.canEditCreditInstallment(account.data,purchase.id,index)));
+ return '<section class="card"><h3>Cartões · parcelas futuras</h3><p class="footer-note">Ajuste as compras deste ambiente. As faturas serão atualizadas; pagamentos e meses passados são preservados.</p>'+(purchases.length?purchases.map(purchase=>'<div class="item"><div><b>'+esc(purchase.description)+'</b><small>'+esc(dashboardCardName(purchase.cardId))+' · '+money(purchase.amount)+' · '+purchase.installments.length+' parcela(s)</small></div><button type="button" class="btn outline small" onclick="dashboardOpenCreditEdit(\''+account.profile+'\','+esc(JSON.stringify(purchase.id))+')">Editar parcelas futuras</button></div>').join(''):'<p class="muted">Nenhuma compra com parcelas editáveis.</p>')+'</section>';
+}
+function dashboardOpenCreditEdit(target,id){
+ if(!dashboardAllowed())return;
+ const data=dashboardAccount(target).data,purchase=data.finance?.creditPurchases?.find(row=>row.id===id);
+ if(!purchase)return alert('Compra não encontrada. Atualize o painel.');
+ const rows=purchase.installments.map((part,index)=>{
+  const disabled=FinanceCore.canEditCreditInstallment(data,id,index)?'':'disabled';
+  return '<fieldset class="fields"><legend>Parcela '+part.installmentNumber+'/'+part.installmentCount+(disabled?' · Preservada':'')+'</legend><div class="fields two">'+dashboardInput('Mês da fatura','dashCreditMonth_'+index,'month',part.date.slice(0,7),'required '+disabled)+dashboardInput('Valor (R$)','dashCreditAmount_'+index,'number',part.amount,'required min="0.01" step="0.01" '+disabled)+'</div></fieldset>';
+ }).join('');
+ modal('Parcelas · '+(target==='podo'?'Raquel':'Jefferson')+' · '+dashboardCardName(purchase.cardId),'<form class="fields" onsubmit="event.preventDefault();dashboardSaveCreditEdit(\''+target+'\','+esc(JSON.stringify(id))+')"><div class="notice"><strong>'+esc(purchase.description)+'</strong><br>Altere mês e valor das parcelas em aberto. O total da compra será recalculado. Faturas pagas/canceladas e meses passados são preservados.</div>'+rows+'<label class="field">Motivo da alteração<textarea id="dashCreditReason" rows="2" required maxlength="500"></textarea></label><button type="submit" class="btn full">Salvar parcelas deste ambiente</button></form>'+(data.finance.creditEdits||[]).filter(edit=>edit.purchaseId===id).reverse().map(edit=>'<p class="footer-note">'+esc(edit.date.split('-').reverse().join('/'))+' · '+esc(edit.reason)+' · '+money(edit.before.amount)+' → '+money(edit.after.amount)+'</p>').join(''));
+}
+async function dashboardSaveCreditEdit(target,id){
+ if(!dashboardAllowed())return;
+ try{
+  const data=structuredClone(dashboardAccount(target).data),purchase=data.finance?.creditPurchases?.find(row=>row.id===id);
+  if(!purchase)throw Error('Compra não encontrada. Atualize o painel.');
+  const installments=purchase.installments.map((part,index)=>({...part,date:$('dashCreditMonth_'+index).value+'-01',amount:Number($('dashCreditAmount_'+index).value)}));
+  FinanceCore.editCreditInstallments(data,id,{installments,reason:$('dashCreditReason').value.trim()});
+  await dashboardSave(target,{finance:data.finance});
+ }catch(error){alert(error.message)}
 }
 function renderManagementDashboard(){
  if(!dashboardAllowed())return;
@@ -83,13 +109,13 @@ async function saveDashboardSettings(target){
 function dashboardOpenRecurring(target,index=-1){
  if(!dashboardAllowed())return;
  const account=dashboardAccount(target),rule=FinanceCore.ensure(account.data).recurringBills[index],month=$('dashboardMonth').value||dateToday.slice(0,7);
- const html='<form class="fields" onsubmit="event.preventDefault();dashboardSaveRecurring(\''+target+'\','+index+')">'+dashboardInput('Descrição','dashRuleName','text',rule?.description||'','maxlength="120" required')+dashboardInput('Categoria','dashRuleCategory','text',rule?.category||'Outros','maxlength="120" required')+'<label class="field">Tipo<select id="dashRuleType"><option value="fixed" '+(rule?.fixed?'selected':'')+'>Valor fixo</option><option value="variable" '+(!rule?.fixed?'selected':'')+'>Valor variável</option></select></label>'+dashboardInput('Valor previsto (R$) · opcional para variável','dashRuleAmount','number',rule?.expectedAmount??'','min="0" step="0.01"')+dashboardInput('Dia de vencimento','dashRuleDay','number',rule?.dueDay||10,'min="1" max="31" required')+'<div class="fields two">'+dashboardInput('Primeiro mês','dashRuleStart','month',rule?.startMonth||month,'required')+dashboardInput('Último mês (opcional)','dashRuleEnd','month',rule?.endMonth||'')+'</div><label class="field">Situação<select id="dashRuleActive"><option value="true" '+(rule?.active!==false?'selected':'')+'>Ativa</option><option value="false" '+(rule?.active===false?'selected':'')+'>Pausada</option></select></label><button class="btn full" type="submit">Salvar recorrência</button></form>';
+ const html='<form class="fields" onsubmit="event.preventDefault();dashboardSaveRecurring(\''+target+'\','+index+')">'+dashboardInput('Descrição','dashRuleName','text',rule?.description||'','maxlength="120" required')+dashboardInput('Categoria','dashRuleCategory','text',rule?.category||'Outros','maxlength="120" required')+'<label class="field">Tipo<select id="dashRuleType"><option value="fixed" '+(rule?.fixed?'selected':'')+'>Valor fixo</option><option value="variable" '+(!rule?.fixed?'selected':'')+'>Valor variável</option></select></label>'+dashboardInput(rule?.cardId?'Valor base adicional (R$)':'Valor previsto (R$) · opcional para variável','dashRuleAmount','number',rule?.expectedAmount??'','min="0" step="0.01"')+(rule?.cardId?'<p class="footer-note">As compras do cartão são somadas automaticamente. Cadastre aqui somente valores adicionais; deixe zero se não houver.</p>':'')+dashboardInput('Dia de vencimento','dashRuleDay','number',rule?.dueDay||10,'min="1" max="31" required')+'<div class="fields two">'+dashboardInput('Primeiro mês','dashRuleStart','month',rule?.startMonth||month,'required')+dashboardInput('Último mês (opcional)','dashRuleEnd','month',rule?.endMonth||'')+'</div><label class="field">Situação<select id="dashRuleActive"><option value="true" '+(rule?.active!==false?'selected':'')+'>Ativa</option><option value="false" '+(rule?.active===false?'selected':'')+'>Pausada</option></select></label><button class="btn full" type="submit">Salvar recorrência</button></form>';
  modal('Recorrência · '+(target==='podo'?'Raquel':'Jefferson'),html);
 }
 async function dashboardSaveRecurring(target,index){
  try{
   const data=JSON.parse(JSON.stringify(dashboardAccount(target).data)),finance=FinanceCore.ensure(data),existing=finance.recurringBills[index],raw=$('dashRuleAmount').value;
-  FinanceCore.saveRecurring(data,{...(existing?{id:existing.id}:{}),description:$('dashRuleName').value.trim(),category:$('dashRuleCategory').value.trim(),fixed:$('dashRuleType').value==='fixed',expectedAmount:raw===''?null:Number(raw),dueDay:Number($('dashRuleDay').value),startMonth:$('dashRuleStart').value,endMonth:$('dashRuleEnd').value||null,active:$('dashRuleActive').value==='true'});
+  FinanceCore.saveRecurring(data,{...(existing?{id:existing.id}:{}),...(existing?.cardId?{cardId:existing.cardId}:{}),description:$('dashRuleName').value.trim(),category:$('dashRuleCategory').value.trim(),fixed:$('dashRuleType').value==='fixed',expectedAmount:raw===''?(existing?.cardId?0:null):Number(raw),dueDay:Number($('dashRuleDay').value),startMonth:$('dashRuleStart').value,endMonth:$('dashRuleEnd').value||null,active:$('dashRuleActive').value==='true'});
   FinanceCore.syncMonth(data,$('dashboardMonth').value||dateToday.slice(0,7));await dashboardSave(target,{finance:data.finance});
  }catch(error){alert(error.message)}
 }
@@ -103,5 +129,14 @@ async function dashboardSaveService(index){
   const services=JSON.parse(JSON.stringify(dashboardAccount('podo').data.services)),service={id:services[index]?.id||uid(),name:$('dashServiceName').value.trim(),duration:Number($('dashServiceDuration').value),price:Number($('dashServicePrice').value)};
   if(!service.name||!Number.isInteger(service.duration)||service.duration<5||service.duration>1440||!Number.isFinite(service.price)||service.price<0)throw Error('Informe nome, duração e valor válidos.');
   if(index<0)services.push(service);else services[index]=service;await dashboardSave('podo',{services});
+ }catch(error){alert(error.message)}
+}
+async function dashboardDeleteService(index){
+ if(!dashboardAllowed()||!confirm('Excluir este serviço do catálogo? Os atendimentos já registrados serão preservados.'))return;
+ try{
+  const account=dashboardAccount('podo'),services=JSON.parse(JSON.stringify(account.data.services)),service=services[index];
+  if(!service)return;
+  if(account.data.appointments.some(a=>a.serviceIds?.includes(service.id)))service.archived=true;else services.splice(index,1);
+  await dashboardSave('podo',{services});
  }catch(error){alert(error.message)}
 }

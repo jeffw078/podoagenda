@@ -6,8 +6,8 @@
   const text = value => typeof value === 'string' && value.trim().length > 0;
   const id = () => globalThis.crypto.randomUUID();
   const today = () => {
-    const date = new Date();
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    return ['year','month','day'].map(type => parts.find(part => part.type === type).value).join('-');
   };
   const validMonth = value => typeof value === 'string' && /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(value);
   const month = value => validMonth(value) ? value : fail('Mês inválido.');
@@ -45,12 +45,26 @@
     catch { return false; }
   };
   const dueDate = (value, dueDay) => `${value}-${String(Math.min(day(dueDay), daysInMonth(value))).padStart(2, '0')}`;
-  const empty = () => ({ version: 1, openingBalance: null, adjustments: [], monthlyPlans: [], recurringBills: [], bills: [] });
+  const cards = Object.freeze({ nubank: 'Nubank', mercado_pago: 'Mercado Pago' });
+  const validCard = value => typeof value === 'string' && Object.hasOwn(cards, value);
+  function cardForRule(rule) {
+    const canonical = Object.keys(cards).find(value => rule.id === `card:${value}`);
+    if (rule.cardId !== undefined && (!validCard(rule.cardId) || canonical && canonical !== rule.cardId)) fail('Cartão inválido.');
+    return rule.cardId ?? canonical;
+  }
+  const sumCents = amounts => {
+    const total = amounts.reduce((sum, amount) => sum + BigInt(cents(amount)), 0n);
+    if (total > BigInt(Number.MAX_SAFE_INTEGER) || total < BigInt(Number.MIN_SAFE_INTEGER)) fail('Valor fora do limite permitido.');
+    return Number(total);
+  };
+  const empty = () => ({ version: 1, openingBalance: null, adjustments: [], monthlyPlans: [], recurringBills: [], bills: [], creditPurchases: [] });
 
   function ensure(data) {
     if (!object(data)) fail('Documento inválido.');
     if (data.finance === undefined) data.finance = empty();
     if (!object(data.finance) || data.finance.version !== 1 || !['adjustments', 'monthlyPlans', 'recurringBills', 'bills'].every(key => Array.isArray(data.finance[key]))) fail('Dados financeiros inválidos.');
+    if (data.finance.creditPurchases === undefined) data.finance.creditPurchases = [];
+    if (!Array.isArray(data.finance.creditPurchases)) fail('Compras no crédito inválidas.');
     return data.finance;
   }
   function transactions(data) {
@@ -87,17 +101,148 @@
     if (input.fixed && expectedAmount === null) fail('Informe o valor da conta fixa.');
     const startMonth = month(input.startMonth), endMonth = input.endMonth === null ? null : month(input.endMonth);
     if (endMonth && endMonth < startMonth) fail('O fim deve ser posterior ao início.');
-    return { description: input.description.trim(), category: input.category.trim(), fixed: input.fixed, expectedAmount, dueDay: day(input.dueDay), startMonth, endMonth, active: input.active };
+    if (input.cardId !== undefined && !validCard(input.cardId)) fail('Cartão inválido.');
+    return { description: input.description.trim(), category: input.category.trim(), fixed: input.fixed, expectedAmount, dueDay: day(input.dueDay), startMonth, endMonth, active: input.active, ...(input.cardId === undefined ? {} : { cardId: input.cardId }) };
+  }
+  const recurringActive = (rule, value) => rule.active && value >= rule.startMonth && (!rule.endMonth || value <= rule.endMonth);
+  function creditObligations(finance) {
+    const rules = new Map(finance.recurringBills.map(rule => [cardForRule(rule), rule])), obligations = new Map();
+    for (const purchase of finance.creditPurchases || []) {
+      const rule = rules.get(purchase.cardId);
+      if (!rule) fail('Recorrência do cartão não encontrada.');
+      for (const part of purchase.installments) {
+        const value = part.date.slice(0, 7), billId = `recurring:${rule.id}:${value}`;
+        if (!obligations.has(billId)) obligations.set(billId, { rule, month: value, charges: 0n });
+        obligations.get(billId).charges += BigInt(cents(part.amount));
+      }
+    }
+    // Keep vacated months in the expectations so later saves cannot restore old debt.
+    for (const edit of finance.creditEdits || []) {
+      const purchase = finance.creditPurchases.find(row => row.id === edit.purchaseId), rule = rules.get(purchase.cardId);
+      for (const part of [...edit.before.installments, ...edit.after.installments]) {
+        const value = part.date.slice(0, 7), billId = `recurring:${rule.id}:${value}`;
+        if (!obligations.has(billId)) obligations.set(billId, { rule, month: value, charges: 0n });
+      }
+    }
+    for (const obligation of obligations.values()) {
+      const base = recurringActive(obligation.rule, obligation.month) ? obligation.rule.expectedAmount ?? 0 : 0;
+      const total = obligation.charges + BigInt(cents(base));
+      if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+        // Closed invoices retain their historical estimate independently of later bases.
+        const closed = finance.bills.some(bill => bill.id === `recurring:${obligation.rule.id}:${obligation.month}` && bill.status !== 'pending');
+        if (!closed) fail('Valor fora do limite permitido.');
+      }
+      obligation.expectedAmount = Number(total) / 100;
+    }
+    return obligations;
   }
   function saveRecurring(data, input) {
     const normalized = normalizeRecurring(input), finance = ensure(data);
     if (input.id !== undefined && !text(input.id)) fail('Identificador inválido.');
     const existing = input.id === undefined ? null : finance.recurringBills.find(row => row.id === input.id);
     if (input.id !== undefined && !existing) fail('Recorrência não encontrada.');
-    if (existing) { Object.assign(existing, normalized); return existing; }
+    if (existing?.cardId !== undefined && input.cardId === undefined) normalized.cardId = existing.cardId;
+    const candidate = { ...(existing || {}), ...normalized };
+    const cardId = cardForRule(candidate);
+    if (existing && cardForRule(existing) !== cardId) fail('Não é permitido alterar o cartão da recorrência.');
+    if (cardId && finance.recurringBills.some(row => row.id !== existing?.id && cardForRule(row) === cardId)) fail('Este cartão já possui uma recorrência.');
+    if (existing) {
+      if (cardId) {
+        // Preflight every generated pending month so future installment invoices
+        // follow base/activity edits atomically, while closed snapshots remain intact.
+        const staged = { ...data, finance: { ...finance, recurringBills: finance.recurringBills.map(row => row.id === existing.id ? candidate : row), bills: finance.bills.map(bill => ({ ...bill })) } };
+        const months = new Set(finance.bills.filter(bill => bill.source === 'recurring' && bill.sourceId === existing.id && bill.status === 'pending').map(bill => bill.month));
+        for (const obligation of creditObligations(staged.finance).values()) if (obligation.rule.id === existing.id) months.add(obligation.month);
+        for (const value of months) syncMonth(staged, value);
+        Object.assign(existing, normalized);
+        finance.bills = staged.finance.bills;
+      } else Object.assign(existing, normalized);
+      return existing;
+    }
     const rule = { id: id(), ...normalized };
     finance.recurringBills.push(rule);
     return rule;
+  }
+  function ensureCreditCards(data, value) {
+    month(value);
+    const finance = ensure(data), found = new Set();
+    for (const rule of finance.recurringBills) {
+      const cardId = cardForRule(rule);
+      if (cardId && found.has(cardId)) fail('Este cartão já possui uma recorrência.');
+      if (cardId) found.add(cardId);
+    }
+    for (const cardId of Object.keys(cards)) if (!found.has(cardId)) finance.recurringBills.push({
+      id: `card:${cardId}`, cardId, description: `Cartão de crédito · ${cards[cardId]}`, category: 'Cartão de crédito',
+      fixed: false, expectedAmount: 0, dueDay: 10, startMonth: value, endMonth: null, active: true
+    });
+    return finance.recurringBills.filter(rule => cardForRule(rule));
+  }
+  function normalizeCreditPurchase(input, consecutive = false) {
+    if (!object(input) || !validCard(input.cardId) || !text(input.description) || !text(input.category)) fail('Informe cartão, descrição e categoria da compra.');
+    const purchaseDate = date(input.purchaseDate);
+    if (!validMoney(input.amount) || input.amount <= 0) fail('Informe um valor positivo em centavos.');
+    if (!Array.isArray(input.items) || input.items.some(item => !object(item) || !text(item.name) || typeof item.qty !== 'number' || !Number.isFinite(item.qty) || item.qty <= 0 || !validMoney(item.unit) || item.unit < 0)) fail('Itens da compra inválidos.');
+    const count = input.installments?.length;
+    if (!Array.isArray(input.installments) || count < 1 || count > 120) fail('Informe de 1 a 120 parcelas.');
+    let previousMonth;
+    const installments = input.installments.map((part, index) => {
+      if (!object(part) || !validDate(part.date) || !part.date.endsWith('-01') || !validMoney(part.amount) || part.amount <= 0 || part.installmentNumber !== index + 1 || part.installmentCount !== count) fail('Parcela inválida.');
+      const partMonth = part.date.slice(0, 7), serial = Number(partMonth.slice(0, 4)) * 12 + Number(partMonth.slice(5, 7));
+      if (index === 0 && partMonth < purchaseDate.slice(0, 7) || index > 0 && (serial <= previousMonth || consecutive && serial !== previousMonth + 1)) fail('Escolha meses em ordem, sem repetir o mês de uma parcela.');
+      previousMonth = serial;
+      return { date: part.date, amount: part.amount, installmentNumber: index + 1, installmentCount: count };
+    });
+    if (sumCents(installments.map(part => part.amount)) !== cents(input.amount)) fail('A soma das parcelas deve corresponder ao total da compra.');
+    return { cardId: input.cardId, description: input.description.trim(), category: input.category.trim(), purchaseDate, amount: input.amount,
+      items: input.items.map(item => ({ name: item.name.trim(), qty: item.qty, unit: item.unit })), installments };
+  }
+  function closedCreditInvoice(finance, cardId, value) {
+    const rule = finance.recurringBills.find(row => cardForRule(row) === cardId);
+    return finance.bills.some(bill => bill.source === 'recurring' && bill.sourceId === (rule?.id || `card:${cardId}`) && bill.month === value && bill.status !== 'pending');
+  }
+  function recordCreditPurchase(data, input) {
+    const normalized = normalizeCreditPurchase(input, true);
+    if (!validateFinance(data)) fail('Dados financeiros inválidos.');
+    const staged = { ...data, finance: structuredClone(data.finance || empty()) };
+    ensureCreditCards(staged, normalized.installments[0].date.slice(0, 7));
+    for (const part of normalized.installments) if (closedCreditInvoice(staged.finance, normalized.cardId, part.date.slice(0, 7))) fail('A fatura já foi paga ou cancelada. Escolha outro mês inicial.');
+    const purchase = { id: id(), ...normalized };
+    staged.finance.creditPurchases.push(purchase);
+    for (const part of normalized.installments) syncMonth(staged, part.date.slice(0, 7));
+    if (!validateFinance(staged)) fail('Dados financeiros inválidos.');
+    data.finance = staged.finance;
+    return purchase;
+  }
+  const creditSnapshot = purchase => ({ amount: purchase.amount, installments: structuredClone(purchase.installments) });
+  function editableCreditChanges(finance, purchase, next, onDate) {
+    if (purchase.installments.length !== next.installments.length) return false;
+    let changed = false;
+    for (let index = 0; index < purchase.installments.length; index++) {
+      const oldPart = purchase.installments[index], newPart = next.installments[index];
+      if (same(oldPart, newPart)) continue;
+      changed = true;
+      if (oldPart.date.slice(0, 7) < onDate.slice(0, 7) || newPart.date.slice(0, 7) < onDate.slice(0, 7) || closedCreditInvoice(finance, purchase.cardId, oldPart.date.slice(0, 7)) || closedCreditInvoice(finance, purchase.cardId, newPart.date.slice(0, 7))) return false;
+    }
+    return changed;
+  }
+  function canEditCreditInstallment(data, purchaseId, index) {
+    const finance = data.finance, purchase = finance?.creditPurchases?.find(row => row.id === purchaseId), part = purchase?.installments[index];
+    return !!part && part.date.slice(0, 7) >= today().slice(0, 7) && !closedCreditInvoice(finance, purchase.cardId, part.date.slice(0, 7));
+  }
+  function editCreditInstallments(data, purchaseId, input) {
+    if (!validateFinance(data)) fail('Dados financeiros inválidos.');
+    const purchase = data.finance?.creditPurchases?.find(row => row.id === purchaseId);
+    if (!purchase || !object(input) || !text(input.reason) || input.reason.trim().length > 500 || !Array.isArray(input.installments)) fail('Informe a compra, as parcelas e o motivo da alteração.');
+    const next = normalizeCreditPurchase({ ...purchase, installments: input.installments, amount: sumCents(input.installments.map(part => part?.amount)) / 100 }), onDate = today();
+    if (!editableCreditChanges(data.finance, purchase, next, onDate)) fail('Altere somente parcelas em aberto do mês atual ou dos próximos meses. Faturas pagas, canceladas e meses passados são preservados.');
+    const staged = { ...data, finance: structuredClone(data.finance) }, index = staged.finance.creditPurchases.findIndex(row => row.id === purchaseId);
+    staged.finance.creditPurchases[index] = { id: purchase.id, ...next };
+    staged.finance.creditEdits ||= [];
+    staged.finance.creditEdits.push({ id: id(), purchaseId, date: onDate, createdAt: new Date().toISOString(), reason: input.reason.trim(), before: creditSnapshot(purchase), after: creditSnapshot(next) });
+    for (const value of new Set([...purchase.installments, ...next.installments].map(part => part.date.slice(0, 7)))) syncMonth(staged, value);
+    if (!validateFinanceChange(data, staged)) fail('Não foi possível atualizar as parcelas. Confira as faturas e os valores.');
+    data.finance = staged.finance;
+    return staged.finance.creditPurchases[index];
   }
   function billRecord(input) {
     if (!object(input) || !text(input.description) || !text(input.category)) fail('Informe descrição e categoria.');
@@ -115,8 +260,12 @@
     month(value);
     const finance = ensure(data), wanted = new Map();
     for (const rule of finance.recurringBills) {
-      if (!rule.active || value < rule.startMonth || (rule.endMonth && value > rule.endMonth)) continue;
-      wanted.set(`recurring:${rule.id}:${value}`, { source: 'recurring', sourceId: rule.id, description: rule.description, category: rule.category, expectedAmount: rule.expectedAmount, dueDate: dueDate(value, rule.dueDay) });
+      if (finance.bills.some(bill => bill.id === `recurring:${rule.id}:${value}` && bill.status !== 'pending')) continue;
+      const active = recurringActive(rule, value), cardId = cardForRule(rule);
+      const charges = cardId ? finance.creditPurchases.filter(purchase => purchase.cardId === cardId).flatMap(purchase => purchase.installments.filter(part => part.date.slice(0, 7) === value)) : [];
+      if (!active && !charges.length) continue;
+      const expectedAmount = cardId ? sumCents([active ? rule.expectedAmount ?? 0 : 0, ...charges.map(part => part.amount)]) / 100 : rule.expectedAmount;
+      wanted.set(`recurring:${rule.id}:${value}`, { source: 'recurring', sourceId: rule.id, description: rule.description, category: rule.category, expectedAmount, dueDate: dueDate(value, rule.dueDay) });
     }
     const plan = finance.monthlyPlans.find(row => row.month === value);
     if (plan) {
@@ -220,6 +369,11 @@
       if (data.finance === undefined) return true;
       const finance = data.finance;
       if (!object(finance) || finance.version !== 1 || !['adjustments', 'monthlyPlans', 'recurringBills', 'bills'].every(key => Array.isArray(finance[key]))) return false;
+      if (finance.creditPurchases !== undefined && !Array.isArray(finance.creditPurchases)) return false;
+      const purchases = finance.creditPurchases || [];
+      if (!unique(purchases, 'id')) return false;
+      const creditEdits = finance.creditEdits || [];
+      if (!Array.isArray(creditEdits) || !unique(creditEdits, 'id')) return false;
       if (!unique(finance.adjustments, 'id') || !unique(finance.monthlyPlans, 'month') || !unique(finance.recurringBills, 'id') || !unique(finance.bills, 'id')) return false;
       const opening = finance.openingBalance;
       if (opening !== null && (!object(opening) || !validMoney(opening.amount) || !validMoney(opening.baseline) || !validDate(opening.date))) return false;
@@ -230,7 +384,27 @@
         lastDate = adjustment.date;
       }
       for (const plan of finance.monthlyPlans) if (!same(plan, normalizePlan(plan.month, plan))) return false;
-      for (const rule of finance.recurringBills) if (!same(rule, { id: rule.id, ...normalizeRecurring(rule) })) return false;
+      const cardRules = new Map();
+      for (const rule of finance.recurringBills) {
+        if (!same(rule, { id: rule.id, ...normalizeRecurring(rule) })) return false;
+        const cardId = cardForRule(rule);
+        if (cardId && cardRules.has(cardId)) return false;
+        if (cardId) cardRules.set(cardId, rule);
+      }
+      for (const purchase of purchases) if (!same(purchase, { id: purchase.id, ...normalizeCreditPurchase(purchase) }) || !cardRules.has(purchase.cardId)) return false;
+      const editedSnapshots = new Map();
+      for (const edit of creditEdits) {
+        const purchase = purchases.find(row => row.id === edit.purchaseId);
+        if (!purchase || !validDate(edit.date) || !text(edit.reason) || edit.reason.length > 500 || typeof edit.createdAt !== 'string' || !Number.isFinite(Date.parse(edit.createdAt))) return false;
+        for (const snapshot of [edit.before, edit.after]) {
+          if (!object(snapshot) || !same(snapshot, creditSnapshot(normalizeCreditPurchase({ ...purchase, ...snapshot })))) return false;
+        }
+        const previous = editedSnapshots.get(purchase.id);
+        if (previous && (!same(previous.snapshot, edit.before) || previous.date > edit.date)) return false;
+        if (!editableCreditChanges({ recurringBills: finance.recurringBills, bills: [] }, { ...purchase, ...edit.before }, edit.after, edit.date)) return false;
+        editedSnapshots.set(purchase.id, { snapshot: edit.after, date: edit.date });
+      }
+      for (const [purchaseId, value] of editedSnapshots) if (!same(value.snapshot, creditSnapshot(purchases.find(row => row.id === purchaseId)))) return false;
       const generated = new Set();
       const rowsById = new Map(), rowsByBill = new Map(), billsById = new Map(finance.bills.map(bill => [bill.id, bill]));
       for (const row of transactions(data)) {
@@ -265,16 +439,54 @@
         const bill = billsById.get(row.billId);
         if (!bill || bill.status !== 'paid' || bill.transactionId !== row.id) return false;
       }
+      for (const [billId, obligation] of creditObligations(finance)) {
+        const bill = billsById.get(billId);
+        if (!bill && obligation.charges === 0n && !recurringActive(obligation.rule, obligation.month)) continue;
+        if (!bill || bill.source !== 'recurring' || bill.sourceId !== obligation.rule.id || bill.month !== obligation.month) return false;
+        if (bill.status === 'pending' && bill.expectedAmount !== obligation.expectedAmount) return false;
+      }
       return true;
     } catch { return false; }
   }
   function validateFinanceChange(previous, next) {
     if (!validateFinance(previous) || !validateFinance(next)) return false;
     const before = previous.finance || empty(), after = next.finance;
-    if (!after) return before.openingBalance === null && before.adjustments.length === 0 && before.bills.length === 0;
+    if (!after) return before.openingBalance === null && before.adjustments.length === 0 && before.bills.length === 0 && !(before.creditPurchases || []).length;
     if (before.openingBalance !== null && !same(before.openingBalance, after.openingBalance)) return false;
     if (after.adjustments.length < before.adjustments.length || !before.adjustments.every((row, index) => same(row, after.adjustments[index]))) return false;
+    const oldPurchases = before.creditPurchases || [], newPurchases = after.creditPurchases || [];
+    const oldEdits = before.creditEdits || [], edits = after.creditEdits || [];
+    if (edits.length < oldEdits.length || !oldEdits.every((row, index) => same(row, edits[index])) || newPurchases.length < oldPurchases.length) return false;
+    const expectedPurchases = new Map(oldPurchases.map(row => [row.id, row]));
+    for (const edit of edits.slice(oldEdits.length)) {
+      const purchase = expectedPurchases.get(edit.purchaseId);
+      if (!purchase || edit.date !== today() || !same(creditSnapshot(purchase), edit.before) || !editableCreditChanges(before, purchase, edit.after, edit.date) || !editableCreditChanges(after, purchase, edit.after, edit.date)) return false;
+      expectedPurchases.set(purchase.id, { ...purchase, ...edit.after });
+    }
+    if (!oldPurchases.every((row, index) => same(expectedPurchases.get(row.id), newPurchases[index]))) return false;
+    for (const rule of before.recurringBills) {
+      const nextRule = after.recurringBills.find(row => row.id === rule.id), cardId = cardForRule(rule);
+      if (nextRule && (cardForRule(nextRule) !== cardId || rule.cardId !== undefined && nextRule.cardId !== rule.cardId)) return false;
+      if (!nextRule && cardId && oldPurchases.some(purchase => purchase.cardId === cardId)) return false;
+    }
+    for (const purchase of newPurchases.slice(oldPurchases.length)) for (const part of purchase.installments) {
+      if (closedCreditInvoice(before, purchase.cardId, part.date.slice(0, 7))) return false;
+    }
     try {
+      const previousBills = new Map(before.bills.map(bill => [bill.id, bill])), nextBills = new Map(after.bills.map(bill => [bill.id, bill]));
+      const nextObligations = creditObligations(after);
+      for (const [billId, obligation] of nextObligations) {
+        const bill = nextBills.get(billId), oldBill = previousBills.get(billId);
+        if (!bill && obligation.charges === 0n && !recurringActive(obligation.rule, obligation.month)) continue;
+        if ((!oldBill || oldBill.status === 'pending') && bill.expectedAmount !== obligation.expectedAmount) return false;
+      }
+      for (const [billId, obligation] of creditObligations(before)) {
+        if (nextObligations.has(billId) || previousBills.get(billId)?.status !== 'pending') continue;
+        const rule = after.recurringBills.find(row => row.id === obligation.rule.id), bill = nextBills.get(billId);
+        if (!rule) return false;
+        const active = recurringActive(rule, obligation.month), base = active ? rule.expectedAmount ?? 0 : 0;
+        if (bill ? bill.expectedAmount !== base : active) return false;
+      }
       if (before.openingBalance === null && after.openingBalance !== null && cents(after.openingBalance.baseline) !== sumTransactions(next, after.openingBalance.date)) return false;
       // Check only appended snapshots. Historical transaction edits intentionally affect
       // today's ledger without rewriting the audit snapshots from earlier saves.
@@ -290,5 +502,5 @@
     });
   }
 
-  globalThis.FinanceCore = Object.freeze({ ensure, syncMonth, setMonthPlan, saveRecurring, createBill, cancelBill, payBill, currentBalance, setCurrentBalance, monthlySummary, validateFinance, validateFinanceChange });
+  globalThis.FinanceCore = Object.freeze({ ensure, ensureCreditCards, recordCreditPurchase, editCreditInstallments, canEditCreditInstallment, syncMonth, setMonthPlan, saveRecurring, createBill, cancelBill, payBill, currentBalance, setCurrentBalance, monthlySummary, validateFinance, validateFinanceChange });
 })();

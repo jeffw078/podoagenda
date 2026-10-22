@@ -13,7 +13,7 @@ let saves = 0;
 let modalHtml = '';
 const alerts = [];
 const context = vm.createContext({
-  console, Date, Intl, Math, JSON, Number, String, Boolean,
+  console, Date, Intl, Math, JSON, Number, String, Boolean, structuredClone,
   crypto: { randomUUID: (() => { let n = 0; return () => `test-${++n}`; })() },
   db: { transactions: [], services: [], clients: [], appointments: [], settings: {} },
   profile: 'personal', dateToday: '2026-10-22', $: node,
@@ -41,6 +41,14 @@ assert.match(node('personalFinanceContent').innerHTML, /R\$ 1000\.00/, 'availabl
 assert.match(node('personalFinanceContent').innerHTML, /&lt;Aluguel&gt;/, 'bill descriptions are escaped');
 assert.match(node('personalFinanceContent').innerHTML, /[Ss]em previs|[Aa] definir/, 'unknown estimates remain visible');
 assert.doesNotMatch(node('personalFinanceContent').innerHTML, />\s*<Aluguel>/);
+node('financeMonth').value='2026-10';
+context.profile='podo';
+context.renderPersonalFinance('studioFinanceContent','financeMonth');
+assert.equal(node('studioFinanceContent').innerHTML,node('personalFinanceContent').innerHTML,'Raquel and Jefferson use exactly the same financial control');
+node('financeMonth').value='2026-11';
+context.renderPersonalFinance('studioFinanceContent','financeMonth');
+assert.doesNotMatch(node('studioFinanceContent').innerHTML,/&lt;Aluguel&gt;/,'Raquel financial month is independent from the hidden personal month');
+context.profile='personal';
 context.openFinanceExpenses('spending');
 assert.match(modalHtml, /Contas/);
 assert.match(modalHtml, /Gastos/);
@@ -48,6 +56,12 @@ assert.match(modalHtml, /purchase-entry/);
 assert.equal(node('spendingMounted').checked, true);
 
 context.financeOpenPayment(bill.id);
+assert.doesNotMatch(modalHtml, /option value="credit"/, 'Bill payment is a cash settlement; credit purchases must choose a card in Gastos');
+node('financePayMethod').value = 'credit';
+node('financePayAmount').value = '325.40';
+node('financePayDate').value = '2026-10-22';
+context.financeSavePayment(bill.id);
+assert.equal(context.db.transactions.length,0,'A stale credit payment form cannot bypass invoice selection');
 node('financePayAmount').value = '325.40';
 node('financePayDate').value = '2026-10-22';
 node('financePayMethod').value = 'debit';
@@ -98,4 +112,23 @@ context.financeChangeBillsMonth();
 assert.match(modalHtml, /&lt;Aluguel&gt;/, 'month selection inside the bills modal is preserved');
 context.openFinanceExpenses('bills');
 assert.match(modalHtml, /value="2026-11"/, 'a later dashboard opening resets the modal to its selected month');
+core.recordCreditPurchase(context.db,{cardId:'nubank',description:'Material',category:'Outros',purchaseDate:'2026-10-22',amount:60,items:[],installments:[{date:'2026-11-01',amount:60,installmentNumber:1,installmentCount:1}]});
+const beforeCardEdit=structuredClone(context.db);
+context.financeOpenRecurring('card:nubank');
+assert.match(modalHtml,/Valor base adicional/,'The recurring editor distinguishes additional base from recorded purchases');
+for(const [id,value] of Object.entries({financeRecurringDescription:'Fatura Nubank',financeRecurringCategory:'Cartão de crédito',financeRecurringType:'variable',financeRecurringAmount:'10',financeRecurringDue:'25',financeRecurringStart:'2026-10',financeRecurringEnd:'',financeRecurringActive:'true'}))node(id).value=value;
+context.financeSaveRecurring('card:nubank');
+assert.equal(context.db.finance.recurringBills.find(rule=>rule.id==='card:nubank').cardId,'nubank');
+assert.equal(context.db.finance.bills.find(row=>row.sourceId==='card:nubank'&&row.month==='2026-11').expectedAmount,70,'A recurring edit retains purchases in future invoices');
+assert.ok(core.validateFinanceChange(beforeCardEdit,context.db),'UI changes satisfy server validation');
+const futurePurchase=core.recordCreditPurchase(context.db,{cardId:'mercado_pago',description:'Compra editável',category:'Outros',purchaseDate:'2026-10-22',amount:60,items:[],installments:[{date:'2099-01-01',amount:60,installmentNumber:1,installmentCount:1}]});
+const beforeInstallmentEdit=structuredClone(context.db);
+context.financeOpenCreditEdit(futurePurchase.id);
+assert.match(modalHtml,/Motivo da alteração/);
+node('financeEditMonth_0').value='2099-02';node('financeEditAmount_0').value='55';node('financeCreditEditReason').value='Desconto recebido';
+context.financeSaveCreditEdit(futurePurchase.id);
+assert.equal(context.db.finance.creditPurchases.find(row=>row.id===futurePurchase.id).amount,55);
+assert.equal(context.db.finance.bills.find(row=>row.sourceId==='card:mercado_pago'&&row.month==='2099-02').expectedAmount,55);
+assert.equal(context.db.finance.bills.find(row=>row.sourceId==='card:mercado_pago'&&row.month==='2099-01').expectedAmount,0);
+assert.ok(core.validateFinanceChange(beforeInstallmentEdit,context.db));
 console.log('Finance UI behavior checks passed.');
