@@ -134,6 +134,7 @@ try{
  assert.ok(await evaluate("['Previsão de entradas e saídas','Gastos por categoria','Meta acumulada da reserva'].every(label=>document.querySelector('#personalFinanceContent').textContent.includes(label))"),'monthly forecast, categories, and reserve indicators render');
  assert.equal(await evaluate("document.querySelector('#personalMonth').value"),nextMonth,'Personal home opens in the upcoming month');
  assert.ok(await evaluate("document.querySelector('#personalFinanceContent').textContent.includes('Gastos já previstos')"),'Home prominently shows committed spending');
+ assert.ok(await evaluate("document.querySelector('#personalFinanceContent .finance-insights > .finance-bills-card')&&document.querySelector('#personalFinanceContent .finance-columns > .finance-category-card')"),'Bills and categories are swapped into the requested positions');
  await input('#personalMonth',month);
  await assertPrivate();
  assert.ok(!assets.some(item=>item.username==='jefferson'&&/clinic(?:-features\.js|\.html)/.test(item.url)),'Personal login does not fetch clinical views or feature module');
@@ -144,17 +145,25 @@ try{
  await input('#taskTitle','Revisar agenda compartilhada');await input('#taskDueDate','2026-11-05');await submit();await waitSaved(()=>ownersTasks.length===1);
  assert.equal(ownersTasks[0].createdBy,'jefferson','task creator comes from the authenticated owner');
  assert.equal(ownersTasks[0].dueDate,'2026-11-05');
- await nav('configuracoes');await button('Cadastrar saldo');await input('#financeBalanceAmount','1000');await submit();await waitSaved(()=>owner.data.finance?.openingBalance?.amount===1000);
+ await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'&&!document.querySelector('#taskTitle')");await escape();
+ await nav('configuracoes');await button('Cadastrar saldo');await waitFor("document.querySelector('#financeBalanceAmount')");await input('#financeBalanceAmount','1000');await click('#modalBack');assert.equal(await evaluate("document.querySelector('#modalBack').classList.contains('show')&&document.querySelector('#financeBalanceAmount')?.value==='1000'"),true,'Clicking outside a modal must preserve the open form and its entered value');await submit();await waitSaved(()=>owner.data.finance?.openingBalance?.amount===1000);
  await input('#financePlanIncome_settings','3000');await input('#financePlanMode_settings','percentage');await input('#financePlanValue_settings','10');await input('#financePlanDue_settings','15');await submit('#financeSettingsContent form');await waitSaved(()=>owner.data.finance?.bills.some(bill=>bill.source==='reserve'&&bill.expectedAmount===300));
  assert.ok(await evaluate("document.querySelector('#financeSettingsContent').textContent.includes('Reserva mensal')"),'monthly reserve goal appears among settings recurring items');
  await input('#financeSettingsMonth',month);await input('#cardLimit_nubank','20');await button('Salvar limites do mês');await waitSaved(()=>owner.data.finance?.cardLimits?.some(limit=>limit.month===month&&limit.cardId==='nubank'&&limit.amount===20));
  await nav('reserva');
- await click('#reserveContent .finance-bill button');await input('#financePayMethod','pix');await submit();await waitSaved(()=>owner.data.transactions.length===1);
+ await click('#reserveContent .finance-bill button');await input('#financePayMethod','pix');await click('#modalBack');assert.equal(await evaluate("document.querySelector('#modalBack').classList.contains('show')&&document.querySelector('#financePayMethod')?.value==='pix'"),true,'Payment modal stays open and keeps the method after an outside click');await submit();await waitSaved(()=>owner.data.transactions.length===1);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),700);
  await nav('pessoal');await button('− Saídas','document.querySelector("#pessoal")');await waitFor("document.querySelector('#modalContent').textContent.includes('Gastos diários')");
  assert.ok(await evaluate("document.querySelector('#modalContent').textContent.indexOf('Gastos diários')<document.querySelector('#modalContent').textContent.indexOf('Contas do mês')"),'spending is the first expenses tab');
- await input('.elname','Mercado');await input('.elunit','25');await input('#eDescription','Compras');await input('#ePaymentMethod','cash');await button('Salvar despesa','document.querySelector("#modalContent")');await waitSaved(()=>owner.data.transactions.length===2);
+ await input('.elname','Mercado');await input('.elunit','25');await input('#eDescription','Compras');await input('#ePaymentMethod','cash');await input('#eCategory','Mercado');await button('Salvar despesa','document.querySelector("#modalContent")');await waitSaved(()=>owner.data.transactions.length===2);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),675);
+ await click('#personalFinanceContent .finance-category-button[aria-label^="Ver gastos de Mercado"]');
+ await waitFor("document.querySelector('#modalTitle').textContent==='Gastos de Mercado'");
+ assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Compras')&&document.querySelector('#modalContent').textContent.includes('25,00')"),'Category button opens its underlying spending records and total');
+ const categoryScreen=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);
+ await writeFile(path.join(root,'.browser-check','category-details.png'),Buffer.from(categoryScreen.data,'base64'));
+ await escape();
+
  await button('− Saídas','document.querySelector("#pessoal")');await waitFor("document.querySelector('#modalContent').textContent.includes('Gastos diários')");await input('.elname','Compra parcelada');await input('.elunit','100.01');await input('#eDescription','Notebook parcelado');await input('#ePaymentMethod','credit');await input('#eInstallments','3');
  assert.ok(await evaluate("document.querySelector('#eCreditCard').required&&!document.querySelector('#eCreditCard').disabled"));
  await input('#eCreditCard','nubank');
@@ -166,6 +175,19 @@ try{
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),675,'Credit purchase preserves cash until invoice payment');
  await click('#personalFinanceContent button[aria-label*="Pagar Cartão"][aria-label*="Nubank"]');await input('#financePayMethod','pix');await submit();await waitSaved(()=>owner.data.transactions.length===3);
  assert.equal(FinanceCore.currentBalance(owner.data,dateToday),641.66);
+ await waitFor(`document.querySelector('#personalFinanceContent .finance-bills-card').dataset.billsMonth===${JSON.stringify(nextMonth)}`);
+ await click('#personalFinanceContent .finance-bills-card .finance-heading button');
+ await waitFor(`document.querySelector('#financeBillsMonth')?.value===${JSON.stringify(nextMonth)}`);
+ await escape();
+ await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
+ const billsDesktop=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);
+ await writeFile(path.join(root,'.browser-check','bills-desktop.png'),Buffer.from(billsDesktop.data,'base64'));
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},sessionId);
+ assert.ok(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'),'Bills card in its new position fits on mobile');
+ const billsMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);
+ await writeFile(path.join(root,'.browser-check','bills-mobile.png'),Buffer.from(billsMobile.data,'base64'));
+ await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
+
  await nav('configuracoes');await button('Abrir dashboard');await waitFor("document.querySelectorAll('.dashboard-environment').length===2");
  const adminWire=wire.findLast(item=>item.action==='adminOverview').body;
  assert.equal(adminWire.accounts.length,2);

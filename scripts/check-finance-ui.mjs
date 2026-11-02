@@ -26,7 +26,8 @@ const context = vm.createContext({
   alert(message) { alerts.push(message); }, confirm: () => true,
   renderSpendingForm: () => '<div id="purchase-entry">Itens da compra</div>',
   financeReserveRecurringHtml: () => '',
-  financeIndicatorsHtml: month => `<section id="finance-indicators-placeholder" data-month="${month}"></section>`,
+  financeIndicatorsHtml: (month,bills='') => `<section id="finance-indicators-placeholder" data-month="${month}">${bills}</section>`,
+  financeCategoriesHtml: () => '<section id="finance-categories-placeholder"></section>',
   financeCardLimitsForm: month => `<section id="card-limits-placeholder" data-month="${month}"></section>`,
   showSpendingFields() { node('spendingMounted').checked = true; },
 });

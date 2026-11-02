@@ -96,18 +96,22 @@ function createFinanceInsights(FinanceCore) {
     const projectedIncome = Math.max(recordedIncome, incomePlan?.expectedIncome || 0);
     const bills = (finance.bills || []).filter(bill => bill.month === value && bill.status !== 'cancelled');
     let outflowCents = 0, unknown = 0;
-    const categories = new Map();
-    const addCategory=(category,amount)=>categories.set(category||'Outros',(categories.get(category||'Outros')||0)+cents(amount));
+    const categories = new Map(), categoryExpenses = [];
+    const addCategory=(category,amount,detail)=>{
+      const name=category||'Outros';
+      categories.set(name,(categories.get(name)||0)+cents(amount));
+      categoryExpenses.push({...detail,category:name,amount});
+    };
     const cardBill=bill=>bill?.source==='recurring'&&(bill.sourceId==='card:nubank'||bill.sourceId==='card:mercado_pago'||(finance.recurringBills||[]).some(rule=>rule.id===bill.sourceId&&CARD_IDS.has(rule.cardId)));
     for (const row of rows) {
       if(row.type!=='expense'||monthOf(row.date)!==value)continue;
       outflowCents+=cents(row.amount);
       const bill=(finance.bills||[]).find(bill=>bill.id===row.billId);
       if(row.financeKind==='reserve'||cardBill(bill))continue;
-      addCategory(row.category||bill?.category,row.amount);
+      addCategory(row.category||bill?.category,row.amount,{id:row.id,source:'transaction',description:row.description||bill?.description||'Despesa',date:row.date,method:row.method||row.paymentMethod||''});
     }
     for (const purchase of finance.creditPurchases || []) for (const part of purchase.installments || []) {
-      if(monthOf(part.date)===value)addCategory(purchase.category,part.amount);
+      if(monthOf(part.date)===value)addCategory(purchase.category,part.amount,{id:purchase.id,source:'credit',description:purchase.description||'Compra no cartão',date:part.date,purchaseDate:purchase.purchaseDate,cardId:purchase.cardId,installmentNumber:part.installmentNumber||1,installmentCount:part.installmentCount||1});
     }
     for (const bill of bills) if(bill.status==='pending') {
       if(bill.expectedAmount===null)unknown++;else outflowCents+=cents(bill.expectedAmount);
@@ -126,6 +130,7 @@ function createFinanceInsights(FinanceCore) {
       month: value, asOf, summary,
       forecast: { income: projectedIncome, outflows: outflowCents / 100, gap: gapCents / 100, shortfall: Math.max(0, -gapCents) / 100, unknown, incomePlanMonth: incomePlan?.month || null, incomeEstimated: !!incomePlan && !plan && incomePlan.expectedIncome > recordedIncome },
       categories: [...categories].map(([category, total]) => ({ category, amount: total / 100 })),
+      categoryExpenses,
       reserve: { throughMonth: through, saved: saved / 100, target: target / 100, difference: (saved - target) / 100, percentage: target ? Math.min(100, Math.round(saved * 10000 / target) / 100) : null }
     };
   }
