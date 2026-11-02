@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { prepareExpenseRemoval, expenseHistoryUnchanged } from '../lib/expense-removals.js';
 
-const context = vm.createContext({ console, Date, Intl, Math, JSON, Number, String, Boolean, structuredClone, BigInt,
+// These fixed October installment scenarios must not depend on the execution month.
+class ScenarioDate extends Date {
+  constructor(...args) { super(...(args.length ? args : ['2026-10-22T15:00:00.000Z'])); }
+  static now() { return Date.parse('2026-10-22T15:00:00.000Z'); }
+}
+const context = vm.createContext({ console, Date: ScenarioDate, Intl, Math, JSON, Number, String, Boolean, structuredClone, BigInt,
   crypto: { randomUUID: (() => { let index = 0; return () => `audit-${++index}`; })() } });
 vm.runInContext(fs.readFileSync(new URL('../src/shared/finance-core.js', import.meta.url), 'utf8'), context);
 const Core = context.FinanceCore;

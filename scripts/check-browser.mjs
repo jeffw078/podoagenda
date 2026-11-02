@@ -21,6 +21,8 @@ if(!browserPath){console.log('Browser check skipped: set BROWSER_PATH to Chromiu
 const clone=value=>JSON.parse(JSON.stringify(value));
 const dateToday=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const month=dateToday.slice(0,7);
+const [yearNumber,monthNumber]=month.split('-').map(Number);
+const nextMonth=monthNumber===12?`${yearNumber+1}-01`:`${yearNumber}-${String(monthNumber+1).padStart(2,'0')}`;
 const initial=()=>({settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60},clients:[],appointments:[],transactions:[],services:[{id:'hands',name:'Cuidados com as mãos',duration:60,price:80}]});
 const accounts=[{profile:'podo',username:'raquel',data:initial(),revision:0},{profile:'personal',username:'jefferson',data:initial(),revision:0},{profile:'personal',username:'filla',data:initial(),revision:0}];
 accounts[0].data.clients.push({id:'private-client',name:'Clinical secret must stay private',phone:'47988888888',notes:'Private clinical notes'});
@@ -130,6 +132,9 @@ try{
  assert.equal(await evaluate("document.querySelector('#profileIcon').disabled"),false,'TODO task shortcut enables after login');
  assert.equal(await evaluate("document.querySelector('#profileIcon').getAttribute('aria-label')"),'Abrir tarefas TODO');
  assert.ok(await evaluate("['Previsão de entradas e saídas','Gastos por categoria','Meta acumulada da reserva'].every(label=>document.querySelector('#personalFinanceContent').textContent.includes(label))"),'monthly forecast, categories, and reserve indicators render');
+ assert.equal(await evaluate("document.querySelector('#personalMonth').value"),nextMonth,'Personal home opens in the upcoming month');
+ assert.ok(await evaluate("document.querySelector('#personalFinanceContent').textContent.includes('Gastos já previstos')"),'Home prominently shows committed spending');
+ await input('#personalMonth',month);
  await assertPrivate();
  assert.ok(!assets.some(item=>item.username==='jefferson'&&/clinic(?:-features\.js|\.html)/.test(item.url)),'Personal login does not fetch clinical views or feature module');
  assert.ok(wire.filter(item=>item.username==='jefferson'&&item.action==='me').every(item=>!('clients'in item.body.data)&&!('settings'in item.body.data)&&!('services'in item.body.data)&&!('appointments'in item.body.data)),'Personal wire data excludes clinical keys');
@@ -184,6 +189,7 @@ try{
  assert.equal(owner.data.finance.expenseRemovals.at(-1).reason,'Compra registrada em duplicidade','removal records its reason');
  assert.deepEqual(owner.data.finance.bills.find(bill=>bill.id===paidInvoiceBeforeRemoval.id),paidInvoiceBeforeRemoval,'paid invoice remains unchanged after removing the purchase');
  assert.equal(owner.data.finance.bills.find(bill=>bill.sourceId==='card:nubank'&&bill.month===futureMonth)?.expectedAmount,0,'future invoices recalculate without the removed purchase');
+ await waitFor("document.querySelector('#modalContent').textContent.includes('Compra registrada em duplicidade')");
  assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Compra registrada em duplicidade')"),'dashboard lists the removal audit entry');
  await input('#dash_podo_balance','500');await input('#dash_podo_income','4000');await input('#dash_podo_reserve','200');await evaluate("document.querySelector('#dash_podo_balance').closest('form').querySelector('button[type=submit]').click()");
  await waitSaved(()=>clinic.data.finance?.openingBalance?.amount===500);
@@ -217,6 +223,7 @@ try{
  assert.deepEqual(accounts.slice(0,2),originalRecords,'Tester changes preserve original accounts and revisions');
  assert.ok(acceptedSaves.filter(item=>item.username==='filla').every(item=>Object.keys(item.data).every(key=>['transactions','finance'].includes(key))),'Accepted personal saves contain financial keys only');
  await signOut();await login('raquel');
+ assert.equal(await evaluate("document.querySelector('#financeMonth').value"),nextMonth,'Clinic finance defaults to the upcoming month too');
  assert.equal(await evaluate("document.querySelector('#profileIcon').tagName"),'BUTTON');
  await click('#profileIcon');await waitFor("document.querySelector('#modalTitle').textContent==='Tarefas'");
  assert.ok(await evaluate("document.querySelector('#modalContent').textContent.includes('Revisar agenda compartilhada')&&document.querySelector('#modalContent').textContent.includes('05/11/2026')"),'Raquel sees the shared task name and due date');

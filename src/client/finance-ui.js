@@ -67,18 +67,19 @@ function renderPersonalFinance(targetId = 'personalFinanceContent', monthId = 'p
   const month = financeMonth(monthId);
   const bills = financeSync(month);
   const summary = FinanceCore.monthlySummary(db, month, dateToday);
-  const plan = db.finance.monthlyPlans.find(item => item.month === month);
+  const forecast = FinanceInsights.overview(db, month, dateToday).forecast;
+  const incomeHint = forecast.incomeEstimated ? `Estimativa baseada em ${esc(financeMonthLabel(forecast.incomePlanMonth))}.` : forecast.incomePlanMonth ? `Planejamento de ${esc(financeMonthLabel(month))}.` : 'Renda prevista ainda não informada.';
   const unknown = Number(summary.pendingUnknown || 0);
   const transactions = (db.transactions || []).filter(t => t.date?.slice(0, 7) === month).sort((a, b) => b.date.localeCompare(a.date));
   target.innerHTML = `<div class="finance-kpis">
-    ${financeKpi('Disponível hoje', summary.balance, 'Saldo cadastrado, atualizado pelos lançamentos até hoje.', 'finance-kpi-featured')}
-    ${financeKpi('Contas pendentes', summary.pending, unknown ? `+ ${unknown} conta(s) sem previsão de valor` : 'Valores previstos para este mês')}
-    ${financeKpi('Gastos do mês', summary.spending, 'Compras e gastos de consumo')}
-    ${financeKpi('Reservado no mês', summary.reserved, `Meta: ${esc(money(summary.reserveExpected))}`)}
+    ${financeKpi('Entradas previstas', forecast.income, incomeHint, 'finance-kpi-featured')}
+    ${financeKpi('Gastos já previstos', forecast.outflows, unknown ? `+ ${unknown} conta(s) sem previsão de valor` : 'Contas, parcelas, gastos e reserva do mês selecionado.')}
+    ${financeKpi('Saldo previsto do mês', forecast.gap, 'Entradas previstas menos os gastos já previstos.')}
+    ${financeKpi('Disponível hoje', summary.balance, 'Saldo cadastrado, atualizado pelos lançamentos até hoje.')}
   </div>
   ${financeIndicatorsHtml(month)}
   <div class="finance-columns"><section class="card"><div class="finance-heading"><h3>Visão de ${esc(financeMonthLabel(month))}</h3></div>
-    <dl class="finance-summary"><div><dt>Renda mensal prevista</dt><dd>${plan ? esc(money(plan.expectedIncome)) : 'Não informada'}</dd></div><div><dt>Entradas lançadas</dt><dd>${esc(money(summary.income))}</dd></div><div><dt>Contas pagas</dt><dd>${esc(money(summary.billsPaid))}</dd></div><div><dt>Disponível após as contas previstas</dt><dd>${esc(money(summary.freeAfterBills))}</dd></div></dl>${unknown ? '<p class="notice warn">Existem contas sem valor previsto. O disponível após as contas ainda pode mudar.</p>' : ''}
+    <dl class="finance-summary"><div><dt>Renda mensal prevista</dt><dd>${forecast.incomePlanMonth ? esc(money(forecast.income)) : 'Não informada'}</dd></div><div><dt>Entradas lançadas</dt><dd>${esc(money(summary.income))}</dd></div><div><dt>Contas pagas</dt><dd>${esc(money(summary.billsPaid))}</dd></div><div><dt>Disponível após as contas previstas</dt><dd>${esc(money(summary.freeAfterBills))}</dd></div></dl>${unknown ? '<p class="notice warn">Existem contas sem valor previsto. O disponível após as contas ainda pode mudar.</p>' : ''}
     ${!db.finance.openingBalance ? '<button type="button" class="btn secondary full" onclick="financeOpenBalance()">Cadastrar meu saldo atual</button>' : ''}
   </section><section class="card"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills')">Ver / adicionar</button></div>${financeBillRows(bills, true)}</section></div>${financeCreditPurchasesHtml(month)}
   <section class="card"><h3>Movimentações do mês</h3>${transactions.length ? transactions.map(t => `<div class="finance-transaction"><div><strong>${esc(t.description || t.category || 'Lançamento')}</strong><small>${financeDateLabel(t.date)} · ${esc(t.financeKind === 'reserve' ? 'Reserva' : t.financeKind === 'bill' ? 'Conta paga' : t.category || 'Movimentação')}</small></div><strong class="${t.type === 'income' ? 'positive' : 'negative'}">${t.type === 'income' ? '+' : '−'} ${esc(money(t.amount))}</strong></div>`).join('') : '<p class="empty">Sem movimentações neste mês.</p>'}</section>`;

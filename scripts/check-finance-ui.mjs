@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {createFinanceInsights} from '../src/shared/finance-insights.js';
 
 // A DOM boundary double keeps the financial model real. These checks catch
 // missing model writes, duplicate payments, misleading amounts, and lost audit.
@@ -34,6 +35,7 @@ if (fs.existsSync(uiPath)) vm.runInContext(fs.readFileSync(uiPath, 'utf8'), cont
 assert.equal(typeof context.renderPersonalFinance, 'function', 'personal financial dashboard must be available');
 vm.runInContext(fs.readFileSync(new URL('../src/shared/finance-core.js', import.meta.url), 'utf8'), context);
 const core = context.FinanceCore;
+context.FinanceInsights=createFinanceInsights(core);
 core.ensure(context.db);
 core.setCurrentBalance(context.db, 1000, '2026-10-22');
 const bill = core.createBill(context.db, { month: '2026-10', dueDate: '2026-10-25', description: '<Aluguel>', category: 'Moradia', expectedAmount: 300 });

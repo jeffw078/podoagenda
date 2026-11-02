@@ -86,10 +86,14 @@ function createFinanceInsights(FinanceCore) {
   function overview(data, value, asOf) {
     if (typeof value !== 'string' || !MONTH_RE.test(value) || typeof asOf !== 'string' || !DATE_RE.test(asOf)) throw new TypeError('Mês ou data inválidos.');
     const actualData = data && typeof structuredClone === 'function' ? structuredClone(data) : JSON.parse(JSON.stringify(data || {}));
+    FinanceCore.syncMonth(actualData, value);
     const summary = FinanceCore.monthlySummary(actualData, value, asOf);
-    const finance = data?.finance || {}, plan = (finance.monthlyPlans || []).find(row => row.month === value);
-    const rows = data?.transactions || [];
-    const projectedIncome = Math.max(rows.filter(row=>row.type==='income'&&monthOf(row.date)===value).reduce((sum,row)=>sum+cents(row.amount),0)/100, plan?.expectedIncome || 0);
+    const finance = actualData.finance || {}, plans = finance.monthlyPlans || [];
+    const plan = plans.find(row => row.month === value);
+    const incomePlan = plan || (value > asOf.slice(0,7) ? [...plans].filter(row=>row.month<value).sort((a,b)=>b.month.localeCompare(a.month))[0] : null);
+    const rows = actualData.transactions || [];
+    const recordedIncome = rows.filter(row=>row.type==='income'&&monthOf(row.date)===value).reduce((sum,row)=>sum+cents(row.amount),0)/100;
+    const projectedIncome = Math.max(recordedIncome, incomePlan?.expectedIncome || 0);
     const bills = (finance.bills || []).filter(bill => bill.month === value && bill.status !== 'cancelled');
     let outflowCents = 0, unknown = 0;
     const categories = new Map();
@@ -120,7 +124,7 @@ function createFinanceInsights(FinanceCore) {
     const gapCents = cents(projectedIncome) - outflowCents;
     return {
       month: value, asOf, summary,
-      forecast: { income: projectedIncome, outflows: outflowCents / 100, gap: gapCents / 100, shortfall: Math.max(0, -gapCents) / 100, unknown },
+      forecast: { income: projectedIncome, outflows: outflowCents / 100, gap: gapCents / 100, shortfall: Math.max(0, -gapCents) / 100, unknown, incomePlanMonth: incomePlan?.month || null, incomeEstimated: !!incomePlan && !plan && incomePlan.expectedIncome > recordedIncome },
       categories: [...categories].map(([category, total]) => ({ category, amount: total / 100 })),
       reserve: { throughMonth: through, saved: saved / 100, target: target / 100, difference: (saved - target) / 100, percentage: target ? Math.min(100, Math.round(saved * 10000 / target) / 100) : null }
     };

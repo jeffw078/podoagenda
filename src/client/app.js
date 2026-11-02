@@ -6,7 +6,14 @@ async function api(action,extra={}){const r=await fetch('/api',{method:'POST',he
 let sessionClosing=false,tasksFeature=null;
 const persist=()=>{if(!unlocked||sessionClosing)return;const epoch=sessionEpoch,snapshot=JSON.parse(JSON.stringify(db));saveChain=saveChain.then(async()=>{if(epoch!==sessionEpoch||saveFailed)return;try{const result=await api('save',{data:snapshot,revision});if(epoch===sessionEpoch)revision=result.revision}catch(e){if(epoch!==sessionEpoch)return;saveFailed=true;alert('ATENÇÃO: alteração não salva no Neon: '+e.message+' Recarregue a página para evitar perda ou sobrescrita de dados.')}});};
 const $=id=>document.getElementById(id);const dateToday=nowLocal();$('todayLine').textContent=readableDate(dateToday);
-function initializeViewDates(){for(const id of ['agendaDate','financeMonth','personalMonth','reserveMonth','dashboardMonth'])if($(id))$(id).value=id==='agendaDate'?dateToday:dateToday.slice(0,7);}
+function initializeViewDates(){
+ const [year,month]=dateToday.split('-').map(Number);
+ const nextMonthDate=new Date(year,month,1);
+ const nextMonth=`${nextMonthDate.getFullYear()}-${pad(nextMonthDate.getMonth()+1)}`;
+ for(const id of ['agendaDate','financeMonth','personalMonth','reserveMonth','dashboardMonth']){
+  if($(id))$(id).value=id==='agendaDate'?dateToday:['financeMonth','personalMonth'].includes(id)?nextMonth:dateToday.slice(0,7);
+ }
+}
 function requireClinic(){return unlocked&&capabilities.clinic&&profile==='podo'}
 
 function navigate(id){
