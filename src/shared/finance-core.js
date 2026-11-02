@@ -163,6 +163,37 @@
     finance.recurringBills.push(rule);
     return rule;
   }
+  function cancelRecurring(data, ruleId, fromMonth) {
+    month(fromMonth);
+    if (!validateFinance(data)) fail('Dados financeiros inválidos.');
+    const rule = data.finance?.recurringBills.find(row => row.id === ruleId);
+    if (!rule) fail('Recorrência não encontrada.');
+    const staged = structuredClone(data);
+    let endMonth = rule.endMonth;
+    const active = rule.active && fromMonth > rule.startMonth;
+    if (fromMonth > rule.startMonth) {
+      const [year, number] = fromMonth.split('-').map(Number);
+      const previous = `${String(number === 1 ? year - 1 : year).padStart(4, '0')}-${number === 1 ? '12' : String(number - 1).padStart(2, '0')}`;
+      endMonth = endMonth && endMonth < previous ? endMonth : previous;
+    }
+    const originalBills = staged.finance.bills;
+    const updated = saveRecurring(staged, { ...rule, active, endMonth });
+    if (cardForRule(updated)) {
+      // Card reconciliation visits entire months; commit only this rule's bills.
+      const targetBill = bill => bill.source === 'recurring' && bill.sourceId === ruleId;
+      const reconciled = new Map(staged.finance.bills.filter(targetBill).map(bill => [bill.id, bill]));
+      staged.finance.bills = originalBills.flatMap(bill => {
+        if (!targetBill(bill)) return [bill];
+        const replacement = reconciled.get(bill.id);
+        reconciled.delete(bill.id);
+        return replacement ? [replacement] : [];
+      });
+      staged.finance.bills.push(...reconciled.values());
+    } else staged.finance.bills = staged.finance.bills.filter(bill => bill.source !== 'recurring' || bill.sourceId !== ruleId || bill.status !== 'pending' || recurringActive(updated, bill.month));
+    if (!validateFinanceChange(data, staged)) fail('O cancelamento alteraria o histórico financeiro.');
+    data.finance = staged.finance;
+    return data.finance.recurringBills.find(row => row.id === ruleId);
+  }
   function ensureCreditCards(data, value) {
     month(value);
     const finance = ensure(data), found = new Set();
@@ -502,5 +533,5 @@
     });
   }
 
-  globalThis.FinanceCore = Object.freeze({ ensure, ensureCreditCards, recordCreditPurchase, editCreditInstallments, canEditCreditInstallment, syncMonth, setMonthPlan, saveRecurring, createBill, cancelBill, payBill, currentBalance, setCurrentBalance, monthlySummary, validateFinance, validateFinanceChange });
+  globalThis.FinanceCore = Object.freeze({ ensure, ensureCreditCards, recordCreditPurchase, editCreditInstallments, canEditCreditInstallment, syncMonth, setMonthPlan, saveRecurring, cancelRecurring, createBill, cancelBill, payBill, currentBalance, setCurrentBalance, monthlySummary, validateFinance, validateFinanceChange });
 })();

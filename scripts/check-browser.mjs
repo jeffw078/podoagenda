@@ -283,6 +283,23 @@ try{
  const whatsapp=await evaluate('browserOpened.at(-1)');assert.ok(whatsapp.startsWith('https://wa.me/5547999999999?text='),'WhatsApp prefill includes encoded message');assert.ok(new URL(whatsapp).searchParams.get('text').includes('Cliente risco'));
  await escape();assert.equal(await evaluate("document.querySelector('#modalBack').classList.contains('show')"),false,'Escape closes modal');
  await nav('configuracoes');assert.equal(await evaluate("document.querySelectorAll('#dashboard,#dashboardAccess').length"),0,'Clinical account has no management dashboard');
+ await button('+ Recorrência');await waitFor("document.querySelector('#financeRecurringDescription')");
+ await input('#financeRecurringDescription','Conta recorrente de teste');await input('#financeRecurringAmount','75');await input('#financeRecurringStart',month);await submit();
+ await waitSaved(()=>clinic.data.finance.recurringBills.some(r=>r.description==='Conta recorrente de teste'));
+ const recurring=clinic.data.finance.recurringBills.find(r=>r.description==='Conta recorrente de teste');
+ await nav('financas');await input('#financeMonth',month);
+ await click('#studioFinanceContent button[aria-label="Pagar Conta recorrente de teste"]');await input('#financePayMethod','pix');await submit();
+ await waitSaved(()=>clinic.data.finance.bills.some(b=>b.sourceId===recurring.id&&b.month===month&&b.status==='paid'));
+ const paidRecurring=clone(clinic.data.finance.bills.find(b=>b.sourceId===recurring.id&&b.month===month));
+ await nav('configuracoes');await click('#financeSettingsContent button[aria-label="Cancelar recorrência Conta recorrente de teste"]');
+ await waitFor("document.querySelector('#financeRecurringCancelMonth')");await input('#financeRecurringCancelMonth',nextMonth);
+ const cancellationPreview=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);await writeFile(path.join(root,'.browser-check','cancel-recurring.png'),Buffer.from(cancellationPreview.data,'base64'));
+ await submit();await waitSaved(()=>clinic.data.finance.recurringBills.find(r=>r.id===recurring.id)?.endMonth===month);
+ assert.deepEqual(clinic.data.finance.bills.find(b=>b.id===paidRecurring.id),paidRecurring,'Cancelling recurrence retains its paid month');
+ assert.ok(!clinic.data.finance.bills.some(b=>b.sourceId===recurring.id&&b.month>=nextMonth&&b.status==='pending'),'Previously generated future charges disappear immediately');
+ await nav('financas');await input('#financeMonth',nextMonth);
+ assert.ok(!await evaluate("document.querySelector('#studioFinanceContent .finance-bills-card').textContent.includes('Conta recorrente de teste')"),'Cancelled recurrence stays absent when opening its cutoff month');
+
  assert.deepEqual(await evaluate('browserAlerts'),[]);
  assert.deepEqual(await evaluate('browserCspViolations'),[],'All UI flows comply with the deployed Content Security Policy');
  assert.ok(FinanceCore.validateFinance(owner.data));assert.ok(FinanceCore.validateFinance(clinic.data));assert.ok(FinanceCore.validateFinance(friend.data));
