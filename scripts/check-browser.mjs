@@ -300,6 +300,15 @@ try{
  await nav('financas');await input('#financeMonth',nextMonth);
  assert.ok(!await evaluate("document.querySelector('#studioFinanceContent .finance-bills-card').textContent.includes('Conta recorrente de teste')"),'Cancelled recurrence stays absent when opening its cutoff month');
 
+ await input('#financeMonth',month);
+ await waitFor("document.querySelector('#studioFinanceContent .finance-insights [role=img]')?.getAttribute('aria-label').includes('Entradas reais')");
+ await button('+ Entrada','document.querySelector("#financas")');await input('#iName','Entrada adicional de teste');await input('#iAmount','25.25');await submit();
+ await waitSaved(()=>clinic.data.transactions.some(t=>t.description==='Entrada adicional de teste'&&t.amount===25.25));
+ await waitFor("document.querySelector('#studioFinanceContent .finance-insights [role=img]')?.getAttribute('aria-label').includes('105,25')");
+ assert.ok(await evaluate("document.querySelector('#studioFinanceContent .finance-kpi-featured').textContent.includes('Entradas reais')"),'Summary and forecast use the same actual income');
+ await nav('home');
+ assert.ok(await evaluate("document.querySelector('#homeIndicators [role=img]').getAttribute('aria-label').includes('105,25')"),'The initial screen includes the additional receipt too');
+
  assert.deepEqual(await evaluate('browserAlerts'),[]);
  assert.deepEqual(await evaluate('browserCspViolations'),[],'All UI flows comply with the deployed Content Security Policy');
  assert.ok(FinanceCore.validateFinance(owner.data));assert.ok(FinanceCore.validateFinance(clinic.data));assert.ok(FinanceCore.validateFinance(friend.data));

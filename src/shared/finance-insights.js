@@ -92,8 +92,11 @@ function createFinanceInsights(FinanceCore) {
     const plan = plans.find(row => row.month === value);
     const incomePlan = plan || (value > asOf.slice(0,7) ? [...plans].filter(row=>row.month<value).sort((a,b)=>b.month.localeCompare(a.month))[0] : null);
     const rows = actualData.transactions || [];
-    const recordedIncome = rows.filter(row=>row.type==='income'&&monthOf(row.date)===value).reduce((sum,row)=>sum+cents(row.amount),0)/100;
-    const projectedIncome = Math.max(recordedIncome, incomePlan?.expectedIncome || 0);
+    const incomeRows = rows.filter(row=>row.type==='income'&&monthOf(row.date)===value);
+    const recordedIncome = incomeRows.reduce((sum,row)=>sum+cents(row.amount),0)/100;
+    const incomeRecorded = incomeRows.length > 0;
+    const plannedIncome = incomePlan?.expectedIncome ?? 0;
+    const projectedIncome = incomeRecorded ? recordedIncome : plannedIncome;
     const bills = (finance.bills || []).filter(bill => bill.month === value && bill.status !== 'cancelled');
     let outflowCents = 0, unknown = 0;
     const categories = new Map(), categoryExpenses = [];
@@ -128,7 +131,7 @@ function createFinanceInsights(FinanceCore) {
     const gapCents = cents(projectedIncome) - outflowCents;
     return {
       month: value, asOf, summary,
-      forecast: { income: projectedIncome, outflows: outflowCents / 100, gap: gapCents / 100, shortfall: Math.max(0, -gapCents) / 100, unknown, incomePlanMonth: incomePlan?.month || null, incomeEstimated: !!incomePlan && !plan && incomePlan.expectedIncome > recordedIncome },
+      forecast: { income: projectedIncome, outflows: outflowCents / 100, gap: gapCents / 100, shortfall: Math.max(0, -gapCents) / 100, unknown, incomeRecorded, plannedIncome, incomePlanMonth: incomePlan?.month || null, incomeEstimated: !incomeRecorded && !!incomePlan && !plan },
       categories: [...categories].map(([category, total]) => ({ category, amount: total / 100 })),
       categoryExpenses,
       reserve: { throughMonth: through, saved: saved / 100, target: target / 100, difference: (saved - target) / 100, percentage: target ? Math.min(100, Math.round(saved * 10000 / target) / 100) : null }
