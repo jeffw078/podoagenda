@@ -2,6 +2,7 @@
 'use strict';
 let financeSettingsSelectedMonth = '';
 let financeBillsSelectedMonth = '';
+let financeRecurringReferenceMonth = '';
 
 function financeMonth(inputId) {
   const value = $(inputId)?.value;
@@ -50,7 +51,7 @@ function financeBillRows(bills, compact = false) {
   return [...bills].sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1) || a.dueDate.localeCompare(b.dueDate)).map(bill => `<article class="finance-bill">
     <div class="finance-bill-main"><strong>${esc(bill.description)}</strong><span class="muted tiny">${esc(bill.category)} · Vence ${financeDateLabel(bill.dueDate)}${bill.source === 'recurring' ? ' · Recorrente' : bill.source === 'reserve' ? ' · Reserva mensal' : ''}</span>${financeStatus(bill)}</div>
     <div class="finance-bill-values"><span class="tiny muted">Previsto</span><strong>${bill.expectedAmount == null ? 'Sem previsão' : esc(money(bill.expectedAmount))}</strong>${bill.status === 'paid' ? `<span class="tiny muted">Pago em ${financeDateLabel(bill.paidDate)}</span><strong class="positive">${esc(money(bill.paidAmount))}</strong>` : ''}</div>
-    ${bill.status === 'pending' ? `<div class="actions finance-bill-actions"><button type="button" class="btn small" onclick="financeOpenPayment(${financeArgument(bill.id)})" aria-label="Pagar ${esc(bill.description)}">Pagar</button>${compact ? '' : `<button type="button" class="btn outline small" onclick="financeCancelBill(${financeArgument(bill.id)})" aria-label="Cancelar ${esc(bill.description)}">Cancelar</button>`}</div>` : ''}
+    ${bill.status === 'pending' ? `<div class="actions finance-bill-actions"><button type="button" class="btn small" onclick="financeOpenPayment(${financeArgument(bill.id)})" aria-label="Pagar ${esc(bill.description)}">Pagar</button>${bill.source === 'recurring' ? `<button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(bill.sourceId)},${financeArgument(bill.month)})" aria-label="Editar ${esc(bill.description)}">Editar</button>` : ''}<button type="button" class="btn outline small" onclick="financeOpenBillRemoval(${financeArgument(bill.id)})" aria-label="Excluir ${esc(bill.description)}">Excluir</button></div>` : ''}
   </article>`).join('');
 }
 function financeKpi(label, value, hint = '', extra = '') {
@@ -73,7 +74,7 @@ function financeBillsOverview(startMonth) {
 }
 function financeBillsCardHtml(startMonth) {
   const panel = financeBillsOverview(startMonth);
-  return `<section class="card finance-bills-card" data-bills-month="${esc(panel.month)}"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills',false,${financeArgument(panel.month)})">Ver / adicionar</button></div><p class="footer-note">${esc(financeMonthLabel(panel.month))}</p>${financeBillRows(panel.bills, true)}</section>`;
+  return `<section class="card finance-bills-card" data-bills-month="${esc(panel.month)}"><div class="finance-heading"><h3>Contas do mês</h3><button class="btn outline small" onclick="openFinanceExpenses('bills',false,${financeArgument(panel.month)})">Ver / adicionar</button></div><p class="footer-note">${esc(financeMonthLabel(panel.month))}</p><button type="button" class="btn outline full finance-manage-recurring" onclick="financeManageRecurring(${financeArgument(panel.month)})">Gerenciar recorrências</button>${financeBillRows(panel.bills, true)}</section>`;
 }
 function renderPersonalFinance(targetId = 'personalFinanceContent', monthId = 'personalMonth') {
   const target = $(targetId);
@@ -111,7 +112,7 @@ function openFinanceExpenses(tab = 'spending', preserveMonth = false, referenceM
     return;
   }
   const bills = financeSync(month);
-  modal('Gastos diários e contas do mês', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required onchange="financeChangeBillsMonth()"')}</div><p class="footer-note">Ao pagar, informe o valor real; a previsão fica preservada. Configure novas contas em recorrências.</p><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" onclick="financeOpenRecurring()">+ Conta recorrente</button>`);
+  modal('Gastos diários e contas do mês', tabs + `<div class="finance-heading">${financeInput('Mês das contas', 'financeBillsMonth', 'month', month, 'required onchange="financeChangeBillsMonth()"')}</div><p class="footer-note">Edite a recorrência ou exclua uma cobrança pelos botões de cada conta. Pagamentos já registrados ficam preservados.</p><button type="button" class="btn outline full finance-manage-recurring" onclick="financeManageRecurring(${financeArgument(month)})">Gerenciar recorrências</button><div class="card">${financeBillRows(bills)}</div><button type="button" class="btn outline full" onclick="financeOpenRecurring('',${financeArgument(month)})">+ Conta recorrente</button>`);
 }
 function financeChangeBillsMonth() { financeBillsSelectedMonth = financeMonth('financeBillsMonth'); openFinanceExpenses('bills', true); }
 function financeCategories(selected = '') {
@@ -131,9 +132,21 @@ function financeSavePayment(id) {
     FinanceCore.payBill(db, id, { amount: financeAmount('financePayAmount'), date: $('financePayDate').value, method });
   });
 }
-function financeCancelBill(id) {
-  if (!confirm('Cancelar esta conta pendente? O registro continuará no histórico.')) return;
+function financeOpenBillRemoval(id) {
+  const bill = FinanceCore.ensure(db).bills.find(item => item.id === id);
+  if (!bill || bill.status !== 'pending') return financeError(Error('Só é possível excluir uma conta pendente.'));
+  financeBillsSelectedMonth = bill.month;
+  modal('Excluir conta', `<div class="notice"><strong>${esc(bill.description)}</strong><br>${esc(financeMonthLabel(bill.month))}. Pagamentos já registrados ficam preservados.</div><div class="fields"><button type="button" class="btn danger full" onclick="financeCancelBill(${financeArgument(id)},true)">Excluir só esta conta de ${esc(financeMonthLabel(bill.month))}</button>${bill.source === 'recurring' ? `<p class="footer-note">Para retirar também as próximas cobranças, escolha o mês de encerramento da recorrência.</p><button type="button" class="btn outline full" onclick="financeOpenRecurringCancellation(${financeArgument(bill.sourceId)},${financeArgument(bill.month)})">Cancelar recorrência a partir deste mês</button>` : ''}</div>`);
+}
+function financeCancelBill(id, confirmed = false) {
+  if (confirmed !== true && !confirm('Cancelar esta conta pendente? O registro continuará no histórico.')) return;
   financeMutate(() => FinanceCore.cancelBill(db, id), () => openFinanceExpenses('bills', true));
+}
+function financeManageRecurring(month) {
+  financeSettingsSelectedMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month || '') ? month : dateToday.slice(0, 7);
+  closeModal();
+  navigate('configuracoes');
+  $('financeRecurringSettings')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 function financePlanForm(month, scope = '') {
@@ -178,8 +191,9 @@ function financeSaveBalance() {
     FinanceCore.setCurrentBalance(db, amount, $('financeBalanceDate').value, reason);
   });
 }
-function financeOpenRecurring(id = '') {
-  const rule = FinanceCore.ensure(db).recurringBills.find(item => item.id === id) || { description: '', category: 'Outros', fixed: true, expectedAmount: '', dueDay: 10, startMonth: financeSettingsSelectedMonth || dateToday.slice(0, 7), endMonth: '', active: true };
+function financeOpenRecurring(id = '', referenceMonth = '') {
+  financeRecurringReferenceMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(referenceMonth) ? referenceMonth : financeSettingsSelectedMonth || dateToday.slice(0, 7);
+  const rule = FinanceCore.ensure(db).recurringBills.find(item => item.id === id) || { description: '', category: 'Outros', fixed: true, expectedAmount: '', dueDay: 10, startMonth: financeRecurringReferenceMonth, endMonth: '', active: true };
   const card = !!rule.cardId || /^card:(nubank|mercado_pago)$/.test(rule.id || '');
   const amountFields = card ? '<p class="footer-note">O valor da fatura vem das compras e parcelas do cartão. Ajuste aqui somente o cadastro e o vencimento.</p>' : `<div class="fields two"><label class="field">Tipo de conta<select id="financeRecurringType" onchange="financeUpdateRecurringType()"><option value="fixed" ${rule.fixed ? 'selected' : ''}>Fixa</option><option value="variable" ${rule.fixed ? '' : 'selected'}>Variável</option></select></label>${financeInput('Valor previsto (R$)', 'financeRecurringAmount', 'number', rule.expectedAmount ?? '', `${rule.fixed ? 'required' : ''} min="0" step="0.01" placeholder="Sem previsão"`)}</div><p class="footer-note">Contas fixas exigem valor. Em contas variáveis, deixe vazio se ainda não conhecer a previsão.</p>`;
   modal(id ? 'Editar conta recorrente' : 'Nova conta recorrente', `<form class="fields" onsubmit="event.preventDefault();financeSaveRecurring(${financeArgument(id)})">${financeInput('Descrição', 'financeRecurringDescription', 'text', rule.description, 'required maxlength="180"')}<label class="field">Categoria<select id="financeRecurringCategory">${financeCategories(rule.category)}</select></label>${amountFields}<div class="fields two">${financeInput('Dia do vencimento', 'financeRecurringDue', 'number', rule.dueDay, 'required min="1" max="31" step="1"')}<label class="field">Situação<select id="financeRecurringActive"><option value="true" ${rule.active ? 'selected' : ''}>Ativa</option><option value="false" ${rule.active ? '' : 'selected'}>Inativa</option></select></label></div><div class="fields two">${financeInput('Mês de início', 'financeRecurringStart', 'month', rule.startMonth, 'required')}${financeInput('Mês final (opcional)', 'financeRecurringEnd', 'month', rule.endMonth || '')}</div><p class="footer-note">Uma conta é gerada por mês. Alterações preservam contas já pagas.</p><button type="submit" class="btn full">Salvar recorrência</button></form>`);
@@ -191,14 +205,14 @@ function financeSaveRecurring(id = '') {
     const card=!!existing?.cardId || /^card:(nubank|mercado_pago)$/.test(id);
     const fixed=card?existing.fixed:$('financeRecurringType').value==='fixed';
     FinanceCore.saveRecurring(db, { ...(id ? { id } : {}), ...(existing?.cardId?{cardId:existing.cardId}:{}), description: $('financeRecurringDescription').value.trim(), category: $('financeRecurringCategory').value, fixed, expectedAmount:card?existing.expectedAmount:financeAmount('financeRecurringAmount', !fixed), dueDay: Number($('financeRecurringDue').value), startMonth: $('financeRecurringStart').value, endMonth: $('financeRecurringEnd').value || null, active: $('financeRecurringActive').value === 'true' });
-    FinanceCore.syncMonth(db, financeSettingsSelectedMonth || dateToday.slice(0, 7));
+    FinanceCore.syncMonth(db, financeRecurringReferenceMonth || financeSettingsSelectedMonth || dateToday.slice(0, 7));
     if (financeBillsSelectedMonth) FinanceCore.syncMonth(db, financeBillsSelectedMonth);
   });
 }
-function financeOpenRecurringCancellation(id) {
+function financeOpenRecurringCancellation(id, referenceMonth = '') {
   const rule = FinanceCore.ensure(db).recurringBills.find(item => item.id === id);
   if (!rule) return financeError(Error('Recorrência não encontrada.'));
-  const month = financeSettingsSelectedMonth || dateToday.slice(0, 7);
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(referenceMonth) ? referenceMonth : financeSettingsSelectedMonth || dateToday.slice(0, 7);
   const card = !!rule.cardId || /^card:(nubank|mercado_pago)$/.test(rule.id);
   modal('Cancelar recorrência', `<form class="fields" onsubmit="event.preventDefault();financeCancelRecurring(${financeArgument(id)})"><div class="notice"><strong>${esc(rule.description)}</strong><br>As contas pendentes a partir do mês escolhido serão retiradas. Contas já pagas e o histórico serão preservados.</div>${financeInput('Cancelar a partir de', 'financeRecurringCancelMonth', 'month', month, 'required')}${card ? '<p class="notice warn">Compras e parcelas já registradas continuam nas faturas. Cancelar a recorrência não cancela essas dívidas.</p>' : ''}<button type="submit" class="btn danger full">Confirmar cancelamento</button></form>`);
 }
@@ -221,6 +235,6 @@ function renderFinanceSettings() {
   financeSync(month);
   const finance = FinanceCore.ensure(db);
   target.innerHTML = `<section class="card"><div class="finance-heading"><h3>Planejamento financeiro</h3>${financeInput('Mês', 'financeSettingsMonth', 'month', month, 'required onchange="financeSettingsMonthChanged()"')}</div>${financePlanForm(month, 'settings')}</section>
-    ${financeCardLimitsForm(month)}<section class="card"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${!rule.active ? 'Inativa' : rule.endMonth ? (rule.endMonth < month ? 'Encerrada' : 'Ativa até ' + esc(financeMonthLabel(rule.endMonth))) : 'Ativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button>${financeRecurringCancellationButton(rule)}</div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}${financeReserveRecurringHtml(month)}</section>
+    ${financeCardLimitsForm(month)}<section class="card" id="financeRecurringSettings"><div class="finance-heading"><h3>Contas recorrentes</h3><button type="button" class="btn small" onclick="financeOpenRecurring()">+ Recorrência</button></div>${finance.recurringBills.length ? finance.recurringBills.map(rule => `<article class="finance-recurring"><div><strong>${esc(rule.description)}</strong><small>${esc(rule.category)} · ${rule.fixed ? 'Fixa' : 'Variável'} · Dia ${rule.dueDay}</small><small>${esc(financeMonthLabel(rule.startMonth))}${rule.endMonth ? ' até ' + esc(financeMonthLabel(rule.endMonth)) : ' em diante'}</small></div><div><strong>${rule.cardId ? 'Fatura automática' : rule.expectedAmount == null ? 'Sem previsão' : esc(money(rule.expectedAmount))}</strong><span class="pill ${rule.active ? 'green' : 'gray'}">${!rule.active ? 'Inativa' : rule.endMonth ? (rule.endMonth < month ? 'Encerrada' : 'Ativa até ' + esc(financeMonthLabel(rule.endMonth))) : 'Ativa'}</span><button type="button" class="btn outline small" onclick="financeOpenRecurring(${financeArgument(rule.id)})" aria-label="Editar ${esc(rule.description)}">Editar</button>${financeRecurringCancellationButton(rule)}</div></article>`).join('') : '<p class="empty">Cadastre contas fixas e variáveis para organizar os próximos meses.</p>'}${financeReserveRecurringHtml(month)}</section>
     <section class="card"><div class="finance-heading"><h3>Saldo atual e histórico</h3><button type="button" class="btn outline small" onclick="financeOpenBalance()">${finance.openingBalance ? 'Conferir / corrigir' : 'Cadastrar saldo'}</button></div><div class="finance-balance-value">${esc(money(FinanceCore.currentBalance(db, dateToday)))}</div><p class="footer-note">Saldo cadastrado atualizado pelos lançamentos até ${financeDateLabel(dateToday)}.</p>${finance.openingBalance ? `<div class="finance-audit"><strong>Ponto inicial · ${financeDateLabel(finance.openingBalance.date)}</strong><span>${esc(money(finance.openingBalance.amount))}</span></div>` : '<p class="notice">O saldo inicial ainda não foi cadastrado.</p>'}${[...finance.adjustments].reverse().map(adjustment => `<article class="finance-audit"><div><strong>${financeDateLabel(adjustment.date)} · ${esc(adjustment.reason)}</strong><small>${esc(money(adjustment.before))} → ${esc(money(adjustment.after))}</small></div><span>${adjustment.delta >= 0 ? '+' : '−'} ${esc(money(Math.abs(adjustment.delta)))}</span></article>`).join('')}<p class="footer-note">O ponto inicial e as correções anteriores são preservados. Corrigir saldo exige um motivo e não cria receita ou despesa.</p></section>`;
 }
