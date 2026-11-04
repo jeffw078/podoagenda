@@ -10,7 +10,7 @@ assert.equal(config.outputDirectory,'public','Only browser assets may be served 
 assert.equal(config.buildCommand,'npm run build');
 const allowed=new Set([
  'index.html','manifest.json','apple-touch-icon.png','icons/icon-192.png','icons/icon-512.png','icons/favicon-32.png',
- ...['app.bundle.js','finance-browser.js','finance-core.js','finance-insights.js','ui-actions.js','clinic-features.js','tasks-ui.js','finance-ui.css','finance-widgets.css','dashboard-ui.css'].map(file=>'assets/'+file),
+ ...['app.bundle.js','finance-browser.js','finance-core.js','finance-insights.js','appointment-recurrence.js','ui-actions.js','clinic-features.js','tasks-ui.js','finance-ui.css','finance-widgets.css','dashboard-ui.css'].map(file=>'assets/'+file),
  ...['common','personal','clinic','admin'].map(file=>'views/'+file+'.html')
 ]);
 async function files(directory){

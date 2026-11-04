@@ -5,6 +5,7 @@ import {validateCardLimits} from '../src/shared/finance-insights.js';
 import {validAnamnesis} from '../lib/access-control.js';
 const objectValue=value=>value&&typeof value==='object'&&!Array.isArray(value);
 import { test } from 'node:test';
+import * as AppointmentRecurrence from '../src/shared/appointment-recurrence.js';
 
 const html=await readFile(new URL('../src/client/app.js',import.meta.url),'utf8');
 const source=[
@@ -26,7 +27,7 @@ function fixture(){
   element('agendaDate').value='2026-10-22';
   const db={clients:[{id:'c1',name:'Ana',phone:'47999999999'}],services:[{id:'hands',name:'Duas mãos',duration:60,price:90},{id:'short',name:'Cuidado rápido',duration:30,price:40},{id:'long',name:'Sessão longa',duration:120,price:180}],appointments:[{id:'a1',clientId:'c1',serviceIds:['hands'],date:'2026-10-22',time:'09:00',duration:60,price:90,status:'agendado'}],transactions:[],settings:{start:'08:00',end:'18:00',lunch:'12:00',lunchDuration:60}};
   let selected=['hands'];
-  const context=vm.createContext({clinicFeatures:null,requireClinic:()=>true,db,$:element,uid:()=>`new-${++sequence}`,persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),confirm:()=>true,modal:(title,body)=>{opened={title,body}},document:{querySelectorAll:()=>selected.map(value=>({value}))},dateToday:'2026-10-22',esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),durationLabel:n=>n+' min',money:n=>'R$ '+n.toFixed(2),mins:time=>{const [h,m]=time.split(':').map(Number);return h*60+m},tstr:n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`,readableDate:value=>value});
+  const context=vm.createContext({AppointmentRecurrence,clinicFeatures:null,requireClinic:()=>true,db,$:element,uid:()=>`new-${++sequence}`,persist:()=>saved++,closeModal(){},renderAll(){},alert:message=>alerts.push(message),confirm:()=>true,modal:(title,body)=>{opened={title,body}},document:{querySelectorAll:()=>selected.map(value=>({value}))},dateToday:'2026-10-22',esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),durationLabel:n=>n+' min',money:n=>'R$ '+n.toFixed(2),mins:time=>{const [h,m]=time.split(':').map(Number);return h*60+m},tstr:n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`,readableDate:value=>value});
   vm.runInContext(source,context);
   // Keep rendering under test callable, while save actions only persist their data.
   context.renderAll=()=>{};
@@ -45,6 +46,64 @@ test('day view exposes each free interval around bookings and protected lunch',(
   const firstCard=output.slice(0,output.indexOf('09:00 · Ana'));
   assert.match(firstCard,/Duas mãos/);
   assert.equal(firstCard.includes('Sessão longa'),false,'a 2h service cannot be suggested in a 1h gap');
+});
+
+test('appointment form asks about repetition and identifies the client by name and phone',()=>{
+ const f=fixture();f.context.openAppointment('');
+ assert.match(f.opened.body,/Este horário se repete/);
+ assert.match(f.opened.body,/id="apRepeat"/);
+ assert.match(f.opened.body,/Semanal|Toda semana/);
+ assert.match(f.opened.body,/Mensal|Todo mês/);
+ assert.match(f.opened.body,/Ana.*47999999999/);
+});
+
+test('recurrence UI saves linked dates, edits one occurrence and cancels following appointments without revenue',()=>{
+ const f=fixture();f.form({apRepeat:'weekly',apRepeatEnd:'2026-11-05'});f.context.saveAppointment('');
+ const series=f.db.appointments.filter(a=>a.recurrence);
+ assert.deepEqual(series.map(a=>a.date),['2026-10-22','2026-10-29','2026-11-05']);
+ assert.equal(f.db.transactions.length,0);assert.equal(f.saved,1);
+ f.form({apRepeat:'weekly',apRepeatEnd:'2026-11-05',apTime:'10:00',apEditScope:'one'});f.context.saveAppointment(series[0].id);
+ assert.equal(f.db.appointments.find(a=>a.id===series[0].id).time,'10:00');
+ assert.equal(f.db.appointments.find(a=>a.id===series[1].id).time,'08:00');
+ f.context.openRecurringAppointmentCancellation(series[1].id);assert.match(f.opened.body,/Excluir só este/);assert.match(f.opened.body,/Excluir este e os próximos/);
+ f.context.cancelRecurringAppointment(series[1].id,'future');
+ assert.deepEqual(f.db.appointments.filter(a=>a.recurrence).map(a=>a.status),['agendado','cancelado','cancelado']);
+ assert.equal(f.db.transactions.length,0);assert.equal(f.alerts.length,0);
+});
+
+test('recurrence UI rejects the entire batch when a later date is occupied',()=>{
+ const f=fixture();f.db.appointments.push({id:'future-conflict',clientId:'c1',date:'2026-10-29',time:'08:30',duration:30,status:'agendado'});
+ const before=copy(f.db);f.form({apRepeat:'weekly',apRepeatEnd:'2026-11-05'});f.context.saveAppointment('');
+ assert.deepEqual(copy(f.db),before);assert.equal(f.saved,0);assert.match(f.alerts.at(-1),/2026-10-29/);
+});
+
+test('switching a recurrence form to personal ignores the disabled repeat value',()=>{
+ const f=fixture();f.form({apType:'personal',apPersonalTitle:'Reserva pessoal',apPersonalDuration:'30',apTime:'07:00',apRepeat:'weekly',apRepeatEnd:'2026-11-05'});
+ f.element('apRepeat').disabled=true;f.context.saveAppointment('');
+ assert.equal(f.db.appointments.length,2);assert.equal(f.db.appointments.at(-1).type,'personal');assert.equal(f.alerts.length,0);
+});
+
+test('future recurrence edits cannot silently ignore a request to stop repeating',()=>{
+ const f=fixture();f.form({apRepeat:'weekly',apRepeatEnd:'2026-11-05'});f.context.saveAppointment('');
+ const first=f.db.appointments.find(a=>a.recurrence),before=copy(f.db),saved=f.saved;
+ f.context.openAppointment(first.id);assert.match(f.opened.body,/<option value="none" disabled/);
+ f.form({apRepeat:'none',apEditScope:'future',apTime:'10:00'});f.context.saveAppointment(first.id);
+ assert.deepEqual(copy(f.db),before);assert.equal(f.saved,saved);assert.match(f.alerts.at(-1),/intervalo|Excluir/);
+});
+
+test('paid recurring history offers notes instead of an unusable schedule editor',()=>{
+ const f=fixture();f.form({apRepeat:'weekly',apRepeatEnd:'2026-11-05'});f.context.saveAppointment('');
+ const first=f.db.appointments.find(a=>a.recurrence);first.status='concluido';
+ f.db.transactions.push({id:'received',type:'income',amount:90,appointmentId:first.id});
+ f.context.appointmentActions(first.id);assert.doesNotMatch(f.opened.body,/Editar horário ou serviços/);assert.match(f.opened.body,/relato/);
+});
+
+test('monthly edit preview keeps the same month-end anchor as the saved series',()=>{
+ const f=fixture(),record={type:'service',clientId:'c1',serviceIds:['hands'],duration:60,price:90,date:'2027-01-31',time:'08:00',status:'agendado'};
+ f.db.appointments=AppointmentRecurrence.prepareAppointmentSave(f.db,{record,repeat:{frequency:'monthly',interval:1,endDate:'2027-04-30'},today:'2026-10-22'},f.context.uid).appointments;
+ const february=f.db.appointments.find(a=>a.date==='2027-02-28');
+ f.form({apRepeat:'monthly',apRepeatEnd:'2027-04-30',apDate:'2027-02-28',apAppointmentId:february.id});
+ f.context.previewAppointmentRecurrence();assert.match(f.element('apRepeatPreview').textContent,/30\/04\/2027/);
 });
 
 test('free intervals merge overlaps, ignore cancellations and stay inside working hours',()=>{
@@ -157,4 +216,30 @@ test('API accepts personal commitments but rejects personal prices and linked in
   personal.title='';assert.equal(validate(f.db),false);personal.title='Academia';
   f.db.transactions.push({id:'t1',type:'income',description:'Inválido',amount:10,date:'2026-10-22',appointmentId:'p1'});
   assert.equal(validate(f.db),false);
+});
+
+test('API validates recurrence metadata while preserving legacy appointments',async()=>{
+ const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
+ const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue,validateCardLimits});
+ const f=fixture(),appointment=f.db.appointments[0];
+ assert.equal(validate(f.db),true);
+ appointment.type='service';appointment.recurrence={id:'series',frequency:'weekly',interval:1,endDate:'2026-11-12',occurrenceDate:'2026-10-22'};
+ assert.equal(validate(f.db),true);
+ for(const change of [{interval:0},{frequency:'unknown'},{endDate:'2026-02-30'},{occurrenceDate:'2026-11-13'},{anchorDate:'2026-02-30'},{id:''}]){
+  const bad=copy(f.db);Object.assign(bad.appointments[0].recurrence,change);assert.equal(validate(bad),false,JSON.stringify(change));
+ }
+});
+
+test('API accepts a monthly exception earlier than its preserved calendar anchor',async()=>{
+ const api=await readFile(new URL('../api/index.js',import.meta.url),'utf8');
+ const validate=vm.runInNewContext(api.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,objectValue,validateCardLimits});
+ const f=fixture(),repeat={frequency:'monthly',interval:1,endDate:'2027-03-31'};
+ const record={type:'service',clientId:'c1',serviceIds:['hands'],duration:60,price:90,date:'2027-01-31',time:'08:00',status:'agendado'};
+ f.db.appointments=AppointmentRecurrence.prepareAppointmentSave(f.db,{record,repeat,today:'2026-10-22'},f.context.uid).appointments;
+ const selected=f.db.appointments.find(a=>a.recurrence);
+ f.db.appointments=AppointmentRecurrence.prepareAppointmentSave(f.db,{id:selected.id,record:{...selected,date:'2027-01-30'},scope:'one',today:'2026-10-22'},f.context.uid).appointments;
+ const moved=f.db.appointments.find(a=>a.id===selected.id);
+ f.db.appointments=AppointmentRecurrence.prepareAppointmentSave(f.db,{id:moved.id,record:{...moved,time:'10:00'},repeat,scope:'future',today:'2026-10-22'},f.context.uid).appointments;
+ assert.equal(f.db.appointments.find(a=>a.id===selected.id).recurrence.anchorDate,'2027-01-31');
+ assert.equal(validate(f.db),true,'A valid model result must be accepted by the actual save validator');
 });

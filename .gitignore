@@ -13,3 +13,7 @@ docs/*.csv
 .bank-import*.local.json
 public/assets/
 public/views/
+
+# Private contact exports
+contatos/
+*.vcf

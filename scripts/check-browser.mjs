@@ -5,13 +5,17 @@ import {existsSync} from 'node:fs';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import vm from 'node:vm';
 import {accountView} from '../lib/passwords.js';
-import {adminAccountView,hasClinicalWrite,mergeFinancialData} from '../lib/access-control.js';
+import {adminAccountView,hasClinicalWrite,mergeFinancialData,validAnamnesis} from '../lib/access-control.js';
+import {validateCardLimits} from '../src/shared/finance-insights.js';
 import {createTask,completeTask} from '../lib/tasks.js';
 import {prepareExpenseRemoval} from '../lib/expense-removals.js';
 import '../src/shared/finance-core.js';
 
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
+const apiSource=await readFile(path.join(root,'api/index.js'),'utf8');
+const validateClinicalData=vm.runInNewContext(apiSource.match(/^function validateData.*$/m)[0]+';validateData',{validAnamnesis,validateCardLimits,objectValue:value=>value&&typeof value==='object'&&!Array.isArray(value),globalThis:{FinanceCore}});
 const publicRoot=path.join(root,'public');
 const deploymentConfig=JSON.parse(await readFile(path.join(root,'vercel.json'),'utf8'));
 const productionHeaders=deploymentConfig.headers.find(rule=>rule.source==='/(.*)')?.headers||[];
@@ -48,7 +52,7 @@ const server=createServer(async(req,res)=>{
     if(current.profile!=='podo'&&hasClinicalWrite(input))return send(403,{error:'Acesso clínico restrito'});
     if(input.revision!==current.revision)return send(409,{error:'Revisão divergente'});
     const next=current.profile==='podo'?input.data:mergeFinancialData(current.data,input.data);
-    if(!next||!FinanceCore.validateFinanceChange(current.data,next))return send(400,{error:'Financeiro inválido no navegador'});
+    if(!next||current.profile==='podo'&&!validateClinicalData(next)||!FinanceCore.validateFinanceChange(current.data,next))return send(400,{error:'Dados inválidos no navegador'});
     acceptedSaves.push({username:current.username,...clone(input)});current.data=next;current.revision++;return send(200,{revision:current.revision});
    }
    if(['tasksList','tasksCreate','tasksComplete'].includes(input.action)){
@@ -255,6 +259,8 @@ try{
  await waitSaved(()=>ownersTasks[0].completedBy==='raquel');
  const taskCompletionRevision=ownersTasksRevision;
  assert.equal(ownersTasks[0].completedBy,'raquel','Raquel is recorded as the completer');
+ // The server receipt arrives before the task dialog finishes rendering.
+ await waitFor("(()=>{const box=document.querySelector('#modalContent input[type=checkbox]');return box?.checked&&box.disabled})()");
  assert.ok(await evaluate("(()=>{const box=document.querySelector('#modalContent input[type=checkbox]');return box.checked&&box.disabled})()"),'completed tasks cannot be unchecked');
  await click('#modalContent input[type="checkbox"][aria-label="Concluir Revisar agenda compartilhada"]');
  assert.equal(ownersTasksRevision,taskCompletionRevision,'disabled completed task cannot be toggled again');
@@ -344,6 +350,42 @@ try{
  await submit();await waitSaved(()=>clinic.data.finance.recurringBills.find(r=>r.id===singleRule.id)?.endMonth===month);
  assert.ok(!clinic.data.finance.bills.some(b=>b.sourceId===singleRule.id&&b.month>=nextMonth&&b.status==='pending'));
  assert.deepEqual(clinic.data.finance.bills.find(b=>b.id===paidRecurring.id),paidRecurring,'Editing and excluding other accounts preserve recorded payments');
+ await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
+
+ const clinicalHistoryBeforeRecurring=clone(clinic.data.appointments.find(a=>a.id===appointment.id));
+ const receiptsBeforeRecurring=clone(clinic.data.transactions);
+ const shiftDate=(date,days)=>{const value=new Date(date+'T12:00:00Z');value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10);};
+ const seriesStart=shiftDate(dateToday,7),seriesEnd=shiftDate(seriesStart,21);
+ await nav('agenda');await input('#agendaDate',seriesStart);await button('+ Agendar','document.querySelector("#agenda")');
+ await input('#apClient',client.id);await click('#modalContent .service-input');await input('#apTime','09:00');
+ assert.ok(await evaluate("document.querySelector('#apClient').textContent.includes('47999999999')"),'Appointment options identify clients by name and phone');
+ await input('#apRepeat','weekly');await input('#apRepeatEnd',seriesEnd);
+ await waitFor("document.querySelector('#apRepeatPreview').textContent.includes('4 horário')");
+ const recurringForm=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);await writeFile(path.join(root,'.browser-check','recurring-appointment-form.png'),Buffer.from(recurringForm.data,'base64'));
+ await submit();await waitSaved(()=>clinic.data.appointments.filter(a=>a.recurrence).length===4);
+ const recurringSeries=clone(clinic.data.appointments.filter(a=>a.recurrence).sort((a,b)=>a.date.localeCompare(b.date))),seriesId=recurringSeries[0].recurrence.id;
+ assert.equal(new Set(recurringSeries.map(a=>a.recurrence.id)).size,1);assert.deepEqual(clinic.data.transactions,receiptsBeforeRecurring);
+ assert.ok(await evaluate("document.querySelector('#agendaItems').textContent.includes('Recorrente')"),'Recurring slots are labeled in the agenda');
+ await button('Detalhes','document.querySelector("#agendaItems")');await button('Editar horário ou serviços','document.querySelector("#modalContent")');
+ assert.equal(await evaluate("document.querySelector('#apRepeat').disabled"),true,'Editing only one occurrence cannot change the series interval');
+ await input('#apTime','10:00');await submit();await waitSaved(()=>clinic.data.appointments.find(a=>a.id===recurringSeries[0].id)?.time==='10:00');
+ assert.ok(clinic.data.appointments.filter(a=>a.recurrence?.id===seriesId&&a.id!==recurringSeries[0].id).every(a=>a.time==='09:00'),'Single edit leaves every sibling unchanged');
+ await input('#agendaDate',recurringSeries[1].date);await button('Detalhes','document.querySelector("#agendaItems")');await button('Editar horário ou serviços','document.querySelector("#modalContent")');
+ await input('#apEditScope','future');assert.equal(await evaluate("document.querySelector('#apRepeat').disabled"),false);assert.equal(await evaluate("document.querySelector('#apRepeat option[value=none]').disabled"),true,'Stopping a series uses its explicit cancellation flow');await input('#apTime','11:00');await submit();
+ await waitSaved(()=>clinic.data.appointments.filter(a=>a.recurrence?.id===seriesId&&a.date>=recurringSeries[1].date&&a.time==='11:00').length===3);
+ await button('Detalhes','document.querySelector("#agendaItems")');await button('Excluir agendamento recorrente','document.querySelector("#modalContent")');
+ await button('Excluir só este agendamento','document.querySelector("#modalContent")');
+ await waitSaved(()=>clinic.data.appointments.some(a=>a.recurrence?.id===seriesId&&a.date===recurringSeries[1].date&&a.status==='cancelado'));
+ await input('#agendaDate',recurringSeries[2].date);await button('Detalhes','document.querySelector("#agendaItems")');await button('Excluir agendamento recorrente','document.querySelector("#modalContent")');
+ await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},sessionId);
+ assert.ok(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'),'Recurring appointment cancellation fits on mobile');
+ const recurringMobile=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},sessionId);await writeFile(path.join(root,'.browser-check','recurring-appointment-cancel-mobile.png'),Buffer.from(recurringMobile.data,'base64'));
+ await button('Excluir este e os próximos','document.querySelector("#modalContent")');
+ await waitSaved(()=>clinic.data.appointments.filter(a=>a.recurrence?.id===seriesId&&a.status==='cancelado').length===3);
+ assert.equal(clinic.data.appointments.find(a=>a.id===recurringSeries[0].id).status,'agendado');
+ assert.deepEqual(clinic.data.appointments.find(a=>a.id===appointment.id),clinicalHistoryBeforeRecurring);assert.deepEqual(clinic.data.transactions,receiptsBeforeRecurring,'Series actions never create or remove revenue');
+ await input('#agendaDate',shiftDate(seriesStart,28));await button('+ Agendar','document.querySelector("#agenda")');await input('#apRepeat','weekly');await input('#apType','personal');await input('#apPersonalTitle','Reserva após troca de tipo');await input('#apTime','07:00');await input('#apPersonalDuration','30');await submit();
+ await waitSaved(()=>clinic.data.appointments.some(a=>a.type==='personal'&&a.title==='Reserva após troca de tipo'&&!a.recurrence));
  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},sessionId);
 
  assert.deepEqual(await evaluate('browserAlerts'),[]);
